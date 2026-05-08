@@ -45,7 +45,7 @@ Plus engineering safety primitives the precursors lack:
 
 | Phase | Status |
 |---|---|
-| P0 Prep | not started |
+| P0 Prep | contracts drafted, awaiting JJ approval |
 | P1 Hot-path cleanup | not started |
 | P2 Read-path + instrumentation | not started |
 | P3 One-time pattern cleanup | not started |
@@ -66,6 +66,10 @@ dream-management install --config my-project/dream.config.json
 
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — full design
 - [ADR/](./ADR/) — locked architectural decisions
+- [SUCCESS-CRITERIA.md](./SUCCESS-CRITERIA.md) — P0-P5 testable criteria + cross-phase acceptance tests
+- [docs/archive-schema.md](./docs/archive-schema.md) — P0 contract: `archive/` layout + conservation invariants
+- [docs/pattern-firing-log-spec.md](./docs/pattern-firing-log-spec.md) — P0 contract: firing-log format (MF-4 fix)
+- [docs/atomicity-contract.md](./docs/atomicity-contract.md) — P0 contract: `*.tmp` + atomic-rename + lock semantics
 - [docs/adoption-guide.md](./docs/adoption-guide.md) — installing into a new consumer (TBD)
 - [docs/config-reference.md](./docs/config-reference.md) — `dream.config.json` schema (TBD)
 - [docs/failure-modes.md](./docs/failure-modes.md) — known failure modes + recovery (TBD)
