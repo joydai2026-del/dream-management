@@ -132,11 +132,36 @@ The dream worker's demotion gate counts `applied` + `referenced` + `violated` as
 
 The classifier MUST cite a session-log line for every `applied` / `referenced` / `violated` outcome. No citation → outcome demotes to `not-referenced` (the safe default). This guards against hallucinated firings.
 
+The cited line MUST also contain either:
+1. **The rule's identifier substring** — the kebab-case stem of the pattern's filename (e.g., `external-dom-drift-llm-default` for `patterns/active/external-dom-drift-llm-default.md`), OR
+2. **A registered trigger phrase** declared in the pattern's frontmatter under `trigger_phrases:` (optional; if absent, only the identifier check applies).
+
+This guards against the more subtle failure where the classifier fabricates a plausible "applied" outcome with a real-looking citation that doesn't actually pertain to the rule. Stage A enforces this verbatim (see § 5.4).
+
 The classifier MAY skip a rule entirely (omit from both `firings` and `not_referenced`) only if `pre-action.md` was regenerated mid-session — an edge case that triggers a warning in the dream-log.
 
 ### 5.3 Honesty incentive
 
 `violated` is the **highest-value signal** in the log, and the prompt is explicit about this. The classifier is told to over-tag `violated` rather than under-tag, because a missed violation hides exactly the failure mode the system was built to expose.
+
+### 5.4 Stage A verification of evidence (auditor invariant)
+
+The dream worker's Stage A invariant checker performs the following per-firing verification:
+
+```
+for each firing in pattern-firing-log entry:
+  evidence_line = read line at firing.evidence (e.g., session-logs/2026-05-09.md#L142)
+  if evidence_line does not exist:
+    FAIL — broken citation
+  rule_id = firing.pattern (the rule's filename stem)
+  trigger_phrases = read frontmatter trigger_phrases of patterns/active/<rule_id>.md (may be empty)
+  if rule_id NOT IN evidence_line AND none(p IN evidence_line for p in trigger_phrases):
+    FAIL — citation does not pertain to the rule (likely hallucinated firing)
+```
+
+A failure here pauses the dream commit and surfaces the offending firing(s) to JJ via `.dream-log.md`. Phase 2 (ROUTE) does NOT consume firing-log evidence that fails verification.
+
+This closes the loophole flagged by the 2026-05-08 Agent OS audit: previously the auditor only verified the cited line existed, not that it matched the claimed rule. A classifier could hallucinate `applied: shoulders-of-giants-research-first / evidence: session-logs/2026-05-09.md#L1` and pass — now it cannot.
 
 ---
 

@@ -54,6 +54,7 @@ Created in **Phase 0 (SAFETY)** of the dream worker, before any mutation. This i
 ```
 archive/dreams/2026-05-09/
 ├── manifest.json                        # See §2.2
+├── event.json                           # Machine-readable canonical run record (§2.5)
 ├── snapshot/                            # Full pre-mutation copy of hot + warm tier
 │   ├── working-memory.md
 │   ├── identity.md
@@ -67,7 +68,7 @@ archive/dreams/2026-05-09/
 │   │   └── reference/*.md
 │   └── decisions/                       # Symlink, NOT a copy — decisions/ is append-only and never pruned
 ├── diff.md                              # Human-readable summary of what the dream changed (Phase 5 output)
-├── dream-log-entry.md                   # The same entry that was appended to .dream-log.md
+├── dream-log-entry.md                   # Human-readable summary appended to .dream-log.md
 └── staged/                              # *.tmp files written by worker; deleted once committed (§2.4)
     ├── working-memory.md.tmp
     └── ...
@@ -138,6 +139,90 @@ archive/dreams/2026-05-09/
 Worker writes mutations to `staged/<file>.tmp`, NOT in-place next to originals. This keeps the originals clean if the run fails before audit passes. On audit-PASS, files in `staged/` are atomic-renamed to their final paths (see `atomicity-contract.md`). On audit-FAIL, `staged/` is preserved untouched and the dream-log records the path so JJ can inspect.
 
 Once the rename sweep completes, `staged/` is deleted in the same transaction. Presence of `staged/` in a finalized snapshot directory means the run aborted between rename and cleanup — recovery procedure: re-run the dream pass; the lock-and-tmp-cleanup logic (`atomicity-contract.md` §4.2) handles it.
+
+### 2.5 `event.json` (canonical machine-readable run record)
+
+`event.json` is written in Phase 5 (REBUILD INDEXES) alongside `dream-log-entry.md`. The markdown is the human-readable summary; the JSON is the canonical record consumed by:
+
+- The weekly digest generator (P5)
+- Future replay tooling (`lib/recovery.js` and beyond)
+- Cross-day analyses (e.g., "show me all promotions in May")
+
+Schema:
+
+```json
+{
+  "schema_version": "1.0.0",
+  "run_id": "2026-05-09T03:00:14-04:00",
+  "consumer_name": "claude-code-m4-vault",
+  "git_tag": "dream/pre/2026-05-09",
+  "verdict": "PASS",
+  "source_signal": {
+    "sessions_in_24h": 3,
+    "journal_entries_consumed": 14,
+    "corrections_received": 2,
+    "quarantined_entries": 1
+  },
+  "insights": [
+    {
+      "id": "insight-2026-05-09-1",
+      "importance": 9,
+      "summary": "external-DOM-drift rule fired 3x today — reinforced",
+      "source_citations": [
+        "learning-journals/2026-05-09.md#L42",
+        "session-logs/2026-05-09.md#L201"
+      ],
+      "routed_to": "patterns/active/external-dom-drift-llm-default.md"
+    }
+  ],
+  "routed": {
+    "patterns_reinforced": [
+      { "pattern": "external-dom-drift-llm-default", "sightings_after": 12 }
+    ],
+    "patterns_promoted": [],
+    "patterns_promotion_declined": [
+      {
+        "candidate": "verify-live-claims-against-git",
+        "reason": "weighted_evidence=2.5 < threshold=3.0"
+      }
+    ],
+    "corrections_appended": 2,
+    "decisions_logged": ["2026-05-09-bazaar-mercury-only-locked"]
+  },
+  "pruned": {
+    "corrections_lines_archived": 12,
+    "corrections_archive_path": "archive/corrections/2026-05.md",
+    "session_index_lines_before": 1126,
+    "session_index_lines_after": 198,
+    "journals_archived_count": 1,
+    "next_session_prompts_rotated": 1,
+    "patterns_demoted": []
+  },
+  "contradictions_surfaced": [
+    {
+      "description": "Phase-Gated review rounds: CLAUDE.md says 2-cap; corrections.md has 5-round entries",
+      "file_paths": ["~/.claude/CLAUDE.md", "corrections.md"],
+      "decision": "JJ to resolve next morning"
+    }
+  ],
+  "audit": {
+    "stage_a": { "verdict": "PASS", "findings": [] },
+    "stage_b": { "verdict": "PASS", "findings": [], "model": "gpt-5-codex" }
+  },
+  "token_cost": {
+    "worker_input_tokens": 18420,
+    "worker_output_tokens": 3210,
+    "auditor_input_tokens": 4150,
+    "auditor_output_tokens": 612,
+    "usd_estimate": 0.42
+  },
+  "duration_seconds": 142
+}
+```
+
+`schema_version` is bumped on any breaking change. The Stage A auditor verifies that `dream-log-entry.md` and `event.json` agree on the bottom-line numbers (insights count, routed counts, prune deltas, audit verdict). Disagreement → FAIL.
+
+Adding `event.json` partially closes the High-severity industry gap "no standardized audit log format" (per the 2026-05-08 Agent OS audit). Cross-consumer interop is not a goal of v1.0; the schema is consumer-internal and machine-portable within this repo.
 
 ---
 
@@ -232,8 +317,8 @@ The 14-tag window is the **fast rollback** path (`git reset --hard dream/pre/<da
 | Move journal into `archive/journals/YYYY-MM/` | Phase 3 | Worker |
 | Move stale next-session prompts into `archive/next-session-prompts/` | Phase 3 | Worker (P2 hook) |
 | Move retired patterns into `archive/patterns/YYYY-MM-DD/` | n/a | Human-invoked admin tool |
-| Write `archive/dreams/YYYY-MM-DD/diff.md` and `dream-log-entry.md` | Phase 5 | Worker |
-| Verify conservation invariants | Stage A audit | Auditor |
+| Write `archive/dreams/YYYY-MM-DD/diff.md`, `dream-log-entry.md`, `event.json` | Phase 5 | Worker |
+| Verify conservation invariants + dream-log-entry.md ⇔ event.json agreement | Stage A audit | Auditor |
 | Clean `staged/` after rename sweep | Atomic-commit step | Worker |
 | GC tags older than 14 days | Phase 5 cleanup | Worker |
 

@@ -67,9 +67,10 @@ dream-management install --config my-project/dream.config.json
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — full design
 - [ADR/](./ADR/) — locked architectural decisions
 - [SUCCESS-CRITERIA.md](./SUCCESS-CRITERIA.md) — P0-P5 testable criteria + cross-phase acceptance tests
-- [docs/archive-schema.md](./docs/archive-schema.md) — P0 contract: `archive/` layout + conservation invariants
-- [docs/pattern-firing-log-spec.md](./docs/pattern-firing-log-spec.md) — P0 contract: firing-log format (MF-4 fix)
+- [docs/archive-schema.md](./docs/archive-schema.md) — P0 contract: `archive/` layout + conservation invariants + per-night `event.json`
+- [docs/pattern-firing-log-spec.md](./docs/pattern-firing-log-spec.md) — P0 contract: firing-log format (MF-4 fix) + Stage A evidence verification
 - [docs/atomicity-contract.md](./docs/atomicity-contract.md) — P0 contract: `*.tmp` + atomic-rename + lock semantics
+- [ADR/007-source-trust-boundary.md](./ADR/007-source-trust-boundary.md) — `source_agent:` field + quarantine pathway for cross-agent writes
 - [docs/adoption-guide.md](./docs/adoption-guide.md) — installing into a new consumer (TBD)
 - [docs/config-reference.md](./docs/config-reference.md) — `dream.config.json` schema (TBD)
 - [docs/failure-modes.md](./docs/failure-modes.md) — known failure modes + recovery (TBD)
