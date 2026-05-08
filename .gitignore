@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+*.log
+.env
+.env.*
+dream.config.json
+!dream.config.example.json
+tests/fixtures/private/
+.dream-lock
