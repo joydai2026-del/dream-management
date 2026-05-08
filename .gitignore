@@ -3,7 +3,8 @@ node_modules/
 *.log
 .env
 .env.*
-dream.config.json
-!dream.config.example.json
+# Ignore project-root dream.config.json (consumer-private), but allow
+# canonical copies under consumers/<name>/.
+/dream.config.json
 tests/fixtures/private/
 .dream-lock

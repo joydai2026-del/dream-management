@@ -1,0 +1,76 @@
+{
+  "consumer_name": "claude-code-m4-vault",
+  "memory_root": "/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4",
+  "tiers": {
+    "hot": {
+      "working_memory": "working-memory.md",
+      "patterns_active": "patterns/active/",
+      "pre_action": "pre-action.md",
+      "max_lines_working_memory": 80,
+      "max_lines_pre_action": 30,
+      "max_patterns_active": 10
+    },
+    "warm": {
+      "corrections": "corrections.md",
+      "session_index": "session-index.md",
+      "memory_index": "memory-index.md",
+      "decisions_dir": "decisions/",
+      "max_lines_corrections": 150,
+      "max_lines_session_index": 200,
+      "corrections_resolved_ttl_days": 30,
+      "session_index_keep_last_n": 10
+    },
+    "cold": {
+      "archive_root": "archive/",
+      "session_logs": "session-logs/",
+      "patterns_reference": "patterns/reference/",
+      "session_log_archive_after_days": 14
+    },
+    "episodic": {
+      "learning_journal_today": "learning-journals/{{YYYY-MM-DD}}.md",
+      "next_session_prompt": "next-session.md"
+    }
+  },
+  "schedule": {
+    "cron": "0 3 * * *",
+    "dual_gate_min_hours_since_last": 24,
+    "dual_gate_min_sessions_in_window": 1,
+    "scheduler": "launchd",
+    "catch_up_on_wake": true
+  },
+  "promotion_gates": {
+    "max_promotions_per_night": 1,
+    "min_importance_score": 7,
+    "min_journal_mentions": 3,
+    "require_top_n_ranking": 2,
+    "require_source_citation": true,
+    "require_contradiction_check": true,
+    "human_revoke_window_hours": 24,
+    "firing_log_weight": 0.5
+  },
+  "demotion_rules": {
+    "patterns_inactive_days_to_reference": 60,
+    "patterns_referenced_via": "pattern-firing-log.md"
+  },
+  "audit": {
+    "stage_a_invariants_module": "lib/auditor-invariants.js",
+    "stage_b_command": "codex exec --skip-git-repo-check",
+    "stage_b_prompt_template": "templates/codex-audit-prompt.md",
+    "fail_behavior": "pause_and_surface_to_human",
+    "auto_rollback": false
+  },
+  "rollback": {
+    "keep_last_n_tags": 14,
+    "tag_format": "dream/pre/{{YYYY-MM-DD}}",
+    "snapshot_dir": "archive/dreams/{{YYYY-MM-DD}}/"
+  },
+  "instrumentation": {
+    "pattern_firing_log": "pattern-firing-log.md",
+    "weekly_digest": "dream-log-weekly.md",
+    "firing_log_rotation_max_lines": 5000
+  },
+  "models": {
+    "worker_reflection": "claude-sonnet-4-6",
+    "auditor_stage_b": "gpt-5-codex"
+  }
+}
