@@ -13,6 +13,7 @@
     "lint": "node bin/wrapup-lint.js"
   },
   "bin": {
-    "wrapup-lint": "./bin/wrapup-lint.js"
+    "wrapup-lint": "./bin/wrapup-lint.js",
+    "dream": "./bin/dream.js"
   }
 }

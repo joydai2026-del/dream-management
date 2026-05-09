@@ -8,3 +8,5 @@ node_modules/
 /dream.config.json
 tests/fixtures/private/
 .dream-lock
+# Per-repo symlink into the vault project folder; consumer-private.
+.vault
