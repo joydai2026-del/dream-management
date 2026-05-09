@@ -28,22 +28,30 @@ Permit a one-time bootstrap concession on P3 #3. Demoted patterns may satisfy th
 a) `last_fired:` date ≤2026-03-08 (the strict spec), OR
 b) `bootstrap: true` AND `bootstrap_at: 2026-05-09` AND `bootstrap_method:` (describing the proxy used) AND `last_fired:` (proxy date present, even if more recent than 2026-03-08).
 
-The concession applies only to the 2026-05-09 first-cleanup run. To enforce the "one-time" boundary, today's-demotion files also carry a `demotion_phase: p3-2026-05-09` field; the amended P3 #3 verification command scopes ONLY to files with that field. Pre-spec demotions in `reference/` (without `demotion_phase:`) are grandfathered out-of-scope. Reconciliation-merge files (with `reconciliation_merged_at:` only — see § Bucket C below) are also out-of-scope.
+The concession applies only to the 2026-05-09 first-cleanup run. To enforce the "one-time" boundary, today's-demotion files also carry a `demotion_phase: p3-2026-05-09` field; the amended P3 #3 verification command (now `scripts/verify-p3-3.sh`) scopes ONLY to files with that field. Pre-spec demotions in `reference/` (without `demotion_phase:`) are grandfathered out-of-scope. Reconciliation-merge files (with `reconciliation_merged_at:` only) are also out-of-scope.
 
-Future demotions (run by the P4 dream worker against pattern-firing-log data) MUST satisfy (a). The dream worker's Phase 3 demotion gate (per ADR 006 § 6.1) implements (a) directly via firing-log read; no bootstrap pathway exists in code, so future cleanups cannot accidentally satisfy (b).
+Future demotions (run by the P4 dream worker against pattern-firing-log data) MUST satisfy (a). The dream worker's Phase 3 demotion gate (per `docs/pattern-firing-log-spec.md` § 6.1) is currently spec-only: `fired_count == 0` over 60 days. **STRUCTURAL ENFORCEMENT TODO**: the spec § 6.1 demotion logic does NOT yet inspect `bootstrap:` frontmatter or reject bootstrap-flagged candidates. The "one-time" boundary today is convention (this ADR) + the `demotion_phase: p3-2026-05-09` scope tag, NOT code-level rejection. When P4 worker is built, its Phase 3 implementation MUST add explicit logic that:
+
+1. Rejects re-promotion of `bootstrap: true` files unless evidence-based criteria are met (clears the bootstrap flag on re-promotion).
+2. Refuses to write `demotion_phase: p3-2026-05-09` to any new file (the tag is a one-time historical marker).
+3. If a future P3-style cleanup is needed, uses a NEW `demotion_phase:` value (e.g., `p3-2026-MM-DD`) so each cleanup is independently auditable.
+
+Until P4 lands, the boundary is conventional. This ADR + spec amendment is the contract; reviewer-grep verifies it on each session via `scripts/verify-p3-3.sh`.
 
 ## Bootstrap proxy method (for reproducibility)
 
-For each pattern in `patterns/active/` at the time of the 2026-05-09 cleanup, `last_fired:` was computed as:
+For each pattern under consideration at the time of the 2026-05-09 cleanup — both `patterns/active/*.md` files (21 total) AND `patterns/<root>.md` ROOT-ONLY files (5 total, those without an active/ or reference/ twin) — `last_fired:` was computed as:
 
 ```
 last_fired = max(
-  file mtime in patterns/active/<name>.md,
-  most-recent session-log filename that grep-matches <identifier> or content-keyword,
-  most-recent learning-journal filename that grep-matches <identifier>,
-  presence in corrections.md (treated as 2026-04-30 if hit, else not counted)
+  mtime of the file (in active/ for active patterns, in patterns/ root for ROOT-ONLY),
+  date stem of most-recent session-log file (~/Documents/jj-knowledge-vault/agents/claude-code-m4/session-logs/YYYY-MM-DD*.md) whose contents grep-match the pattern's identifier (kebab-case stem),
+  date stem of most-recent learning-journal file (~/Documents/jj-knowledge-vault/agents/claude-code-m4/learning-journals/YYYY-MM-DD-*.md) whose contents grep-match the pattern's identifier,
+  date "2026-04-30" treated as a sentinel if the pattern's identifier appears anywhere in ~/Documents/jj-knowledge-vault/agents/claude-code-m4/corrections.md (else this term is omitted)
 )
 ```
+
+Date format: ISO `YYYY-MM-DD`, lexical sort (works for ISO dates within the same century). All file-system paths are absolute; mtime is local-time stat field with day-precision (`stat -f %Sm -t %Y-%m-%d`). Tie-breaks: when two patterns share an identical max date, the one with a higher `confidence:` frontmatter value is ranked higher; if confidence is equal, alphabetical filename order. The full per-pattern proxy table is recorded in the session log at `~/Documents/jj-knowledge-vault/agents/claude-code-m4/session-logs/2026-05-09-dream-mgmt-p3.md` (and the corresponding learning-journal entry).
 
 Patterns ranked by this proxy descending. Top-10 retained in `active/`; bottom-N demoted to `reference/` with bootstrap frontmatter. The 2026-05-09 cleanup demoted **16 patterns total**:
 
@@ -59,7 +67,10 @@ Plus **1 reconciliation-merge** (NOT a demotion):
 
 Two ROOT-ONLY files were promoted to `active/` (not demoted) during root reconciliation:
 
-- **`codex-review-per-phase-gate.md`**: Promoted because the file's own evidence section logs 2026-05-07 NIGHT (Outreach v2 Phase 0 PR #96) + 2026-05-07 NIGHT-2 (Outreach v2 Phase 1 PR #97) — recent active firings within the past 3 days. The pattern is also dogfooded as the structural baseline for arch-engineer's PR auto-merge gate (per its content). High confidence, recent firing, load-bearing for active discipline.
+- **`codex-review-per-phase-gate.md`**: Promoted because external session-log evidence shows recent active firings:
+  - `~/Documents/jj-knowledge-vault/agents/claude-code-m4/session-logs/2026-05-08.md` (Outreach v2 Phase 0+1 work) records the per-phase Codex gate firing on PR #96 + #97 (4 + 2 rounds respectively). The pattern's own evidence section cites these but the underlying authority is the session log itself, not self-citation.
+  - The pattern is also dogfooded as the structural baseline for arch-engineer's PR auto-merge gate (per its content).
+  - High confidence (existing frontmatter), recent external firing (2026-05-07 dated session work), load-bearing for active discipline.
 - **`pre-customer-scaffolding-gets-pruned.md`**: Promoted because it is explicitly cited in `~/.claude/CLAUDE.md` Master Plan North Star Rule § 3 ("3-question test"). Load-bearing for every session report.
 
 ## Why this is principled, not arbitrary
