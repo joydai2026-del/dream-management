@@ -27,6 +27,12 @@ import {
   GitTagExistsError,
 } from '../lib/dream/phase-0-safety.js';
 import { runReplay } from '../lib/dream/phase-1-replay.js';
+import { collectInsights } from '../lib/dream/insights.js';
+import { scoreAll, scoreHeuristic } from '../lib/dream/importance-score.js';
+import { runRoute } from '../lib/dream/phase-2-route.js';
+import { stageRoutePlan } from '../lib/dream/stage-route.js';
+import { loadPatterns } from '../lib/dream/load-patterns.js';
+import { readAllEntries } from '../lib/firing-log-read.js';
 
 const VALUE_FLAGS = new Set(['--memory-root', '--since', '--repo-root', '--today', '--config']);
 const BOOLEAN_FLAGS = new Set(['--dry-run']);
@@ -114,7 +120,7 @@ function usage() {
   return `Usage: dream --memory-root <path> [--dry-run] [--since YYYY-MM-DD]
                   [--repo-root <path>] [--today YYYY-MM-DD]
 
-P4 starter — phase-0 (safety) + phase-1 (replay).
+P4 starter + Phase-2 ROUTE — phase-0 (safety) + phase-1 (replay) + phase-2 (route).
   --memory-root  Required. The agent's memory directory.
   --dry-run      No mutation: skip git tag and snapshot; still scan replay.
   --since        Limit session-log scan to dates ≥ this ISO date.
@@ -212,6 +218,46 @@ export async function main(argv = process.argv.slice(2)) {
       + `sessions=${replay.sessionLogs.scanned} `
       + `markers=${JSON.stringify(replay.summary.sessionMarkersByKind)}\n`,
     );
+
+    // Phase 2 — ROUTE. Score insights and produce a routing plan. Promotion
+    // candidate auto-extraction is deferred (Phase-1.5 / clustering scope);
+    // the CLI passes an empty candidate list so only reinforcements fire here
+    // until that pipeline is wired.
+    await lock.update('phase-2-route');
+    const insights = collectInsights(replay, { memoryRoot });
+    const scored = await scoreAll(insights, scoreHeuristic);
+    const activePatterns = await loadPatterns(memoryRoot, 'active');
+
+    let firingEntries = [];
+    try {
+      firingEntries = await readAllEntries({
+        logPath: path.join(memoryRoot, 'pattern-firing-log.md'),
+        archiveDir: path.join(memoryRoot, 'archive', 'firing-logs'),
+      });
+    } catch {
+      firingEntries = [];
+    }
+
+    const { plan, summary } = runRoute({
+      today,
+      scoredInsights: scored,
+      activePatterns,
+      promotionCandidates: [], // wired by future clustering pipeline
+      firingEntries,
+    });
+    process.stdout.write(
+      `[phase-2] insights=${insights.length} above-threshold=${summary.aboveThresholdCount} `
+      + `reinforce=${plan.reinforce.length} promote=${plan.promote.length} `
+      + `declined=${plan.declined.length}\n`,
+    );
+
+    if (dryRun) {
+      process.stdout.write(`[phase-2] DRY-RUN skip stage\n`);
+    } else if (plan.reinforce.length > 0 || plan.promote.length > 0) {
+      const dreamDir = path.join(memoryRoot, 'archive', 'dreams', today);
+      const stageResult = await stageRoutePlan({ plan, dreamDir, memoryRoot, today });
+      process.stdout.write(`[phase-2] staged=${stageResult.stagedFiles.length}\n`);
+    }
 
     return 0;
   } catch (e) {
