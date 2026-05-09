@@ -45,10 +45,10 @@ Plus engineering safety primitives the precursors lack:
 
 | Phase | Status |
 |---|---|
-| P0 Prep | contracts drafted, awaiting JJ approval |
-| P1 Hot-path cleanup | not started |
-| P2 Read-path + instrumentation | not started |
-| P3 One-time pattern cleanup | not started |
+| P0 Prep | contracts shipped + amendments (PR #1 OPEN for `feat/p0-contracts → main`) |
+| P1 Hot-path cleanup | shipped on `feat/p1-hot-path` (commit `c7e7237`); 47 tests pass |
+| P2 Read-path + instrumentation | shipped on `feat/p2-read-path` (commit `d5ceadb`); 64 tests pass; 3-round phase-gated review CLEAN |
+| P3 One-time pattern cleanup | shipped on `feat/p3-cleanup` (commits `123ed7f`, `9212d29`, `abbe14d`); 10 active patterns, 16 demoted with bootstrap concession per ADR 008, 8 zombie feedback files archived; vault-side commit `21891b7` |
 | P4 Dream worker | not started |
 | P5 Two-stage auditor + scheduling | not started |
 
