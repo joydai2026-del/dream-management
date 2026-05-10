@@ -38,6 +38,10 @@ import {
   runDatesContradictions,
   stageDatesContradictionsPlan,
 } from '../lib/dream/phase-4-dates-contradictions.js';
+import {
+  runRebuildIndexes,
+  stageRebuildPlan,
+} from '../lib/dream/phase-5-rebuild-indexes.js';
 
 const VALUE_FLAGS = new Set(['--memory-root', '--since', '--repo-root', '--today', '--config']);
 const BOOLEAN_FLAGS = new Set(['--dry-run']);
@@ -125,7 +129,7 @@ function usage() {
   return `Usage: dream --memory-root <path> [--dry-run] [--since YYYY-MM-DD]
                   [--repo-root <path>] [--today YYYY-MM-DD]
 
-P4 worker — phase-0 (safety) + phase-1 (replay) + phase-2 (route) + phase-3 (prune) + phase-4 (dates).
+P4 worker — phase-0 (safety) + phase-1 (replay) + phase-2 (route) + phase-3 (prune) + phase-4 (dates) + phase-5 (rebuild).
   --memory-root  Required. The agent's memory directory.
   --dry-run      No mutation: skip git tag and snapshot; still scan replay.
   --since        Limit session-log scan to dates ≥ this ISO date.
@@ -333,6 +337,39 @@ export async function main(argv = process.argv.slice(2)) {
         plan: datesResult.plan, dreamDir, memoryRoot, today,
       });
       process.stdout.write(`[phase-4] staged=${datesStage.stagedFiles.length}\n`);
+    }
+
+    // Phase 5 — REBUILD INDEXES. Regenerate memory-index.md + pre-action.md,
+    // append a human-readable run summary to .dream-log.md, and write the
+    // canonical event.json + dream-log-entry.md per archive-schema § 2.5.
+    // The audit verdict is "PASS-TENTATIVE" — Stage A + Stage B run on the
+    // staged tree before the sweep step (P5+ scope) commits anything.
+    await lock.update('phase-5-rebuild-indexes');
+    const phase1Summary = replay.summary;
+    const phase2Summary = summary; // from runRoute(...).summary
+    const phase3Summary = pruneResult.summary;
+    const phase4Summary = datesResult.summary;
+    const rebuildResult = await runRebuildIndexes({
+      memoryRoot,
+      today,
+      consumerName: path.basename(memoryRoot),
+      gitTag: `dream/pre/${today}`,
+      verdict: 'PASS-TENTATIVE',
+      phase1Summary, phase2Summary, phase3Summary, phase4Summary,
+      routePlan: plan, prunePlan: pruneResult.plan, datesPlan: datesResult.plan,
+    });
+    process.stdout.write(
+      `[phase-5] memory-index=${rebuildResult.summary.memoryIndexLines}L `
+      + `pre-action=${rebuildResult.summary.preActionLines}L `
+      + `event-json=${rebuildResult.summary.eventJsonBytes}B\n`,
+    );
+    if (dryRun) {
+      process.stdout.write(`[phase-5] DRY-RUN skip stage\n`);
+    } else {
+      const rebuildStage = await stageRebuildPlan({
+        plan: rebuildResult.plan, dreamDir, today,
+      });
+      process.stdout.write(`[phase-5] staged=${rebuildStage.stagedFiles.length}\n`);
     }
 
     return 0;
