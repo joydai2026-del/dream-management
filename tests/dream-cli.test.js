@@ -56,7 +56,11 @@ async function runCli(args, opts = {}) {
   ];
   try {
     const r = await exec('node', [BIN, ...augmented], {
-      env: { ...process.env, DREAM_ALLOW_AUDIT_BYPASS: '1' },
+      env: {
+        ...process.env,
+        DREAM_ALLOW_AUDIT_BYPASS: '1',
+        DREAM_NO_NOTIFY: '1', // suppress macOS notifications during tests
+      },
     });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
   } catch (e) {

@@ -47,7 +47,11 @@ async function setupMin(today = '2026-05-09') {
 async function runCli(args) {
   try {
     const r = await exec('node', [BIN, ...args], {
-      env: { ...process.env, DREAM_ALLOW_AUDIT_BYPASS: '1' },
+      env: {
+        ...process.env,
+        DREAM_ALLOW_AUDIT_BYPASS: '1',
+        DREAM_NO_NOTIFY: '1',
+      },
     });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
   } catch (e) {
@@ -207,6 +211,23 @@ test('weekly digest: does NOT fire on non-Sunday', async () => {
   const dir = await setupMin('2026-05-09'); // 2026-05-09 is a Saturday
   const r = await runCli(['--memory-root', dir, '--today', '2026-05-09']);
   assert.doesNotMatch(r.stdout, /\[digest\]/);
+});
+
+test('notification: --no-notify suppresses notifyMacOS (test path)', async () => {
+  // Hard to assert "notification didn't fire" portably, but we CAN
+  // assert the CLI accepts the flag without erroring. The runner
+  // already injects DREAM_NO_NOTIFY=1 so live runs in CI never pop.
+  const dir = await setupMin();
+  const r = await runCli([
+    '--memory-root', dir, '--today', '2026-05-09',
+    '--skip-dual-gate', '--skip-audit', '--no-notify',
+  ]);
+  assert.equal(r.code, 0);
+});
+
+test('notification: usage mentions --no-notify', async () => {
+  const r = await runCli(['--help']);
+  assert.match(r.stdout, /--no-notify/);
 });
 
 test('usage text mentions all P5 flags', async () => {

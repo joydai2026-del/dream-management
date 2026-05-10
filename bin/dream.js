@@ -16,6 +16,7 @@
 
 import path from 'node:path';
 import process from 'node:process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
   acquireLock,
@@ -56,6 +57,7 @@ const VALUE_FLAGS = new Set([
 ]);
 const BOOLEAN_FLAGS = new Set([
   '--dry-run', '--skip-dual-gate', '--skip-stage-b', '--skip-audit',
+  '--no-notify',
 ]);
 const HELP_FLAGS = new Set(['--help', '-h']);
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -152,6 +154,7 @@ P5 worker — full pipeline: dual-gate → phase-0..5 stage → Stage A → Stag
   --skip-dual-gate     Run regardless of cadence-gate (manual debug).
   --skip-stage-b       Skip Stage B codex audit (use when codex CLI unavailable).
   --skip-audit         Skip Stage A + Stage B + sweep entirely (test-only).
+  --no-notify          Suppress macOS Notification Center bubble at end of run.
   --stage-b-command    Override Stage B command (default: 'codex exec --skip-git-repo-check').
 
 Exit codes:
@@ -168,6 +171,35 @@ function todayISO(d = new Date()) {
   // Local-time date — not UTC. The dream cadence is a wall-clock 3 AM event.
   const tz = d.getTimezoneOffset() * 60_000;
   return new Date(d.getTime() - tz).toISOString().slice(0, 10);
+}
+
+/**
+ * Best-effort macOS notification. Failure (no osascript, headless run,
+ * notification permission denied, non-Darwin) NEVER fails the worker.
+ * Skips entirely on non-darwin platforms or when --no-notify is set.
+ *
+ * Detached + unref so the worker's exit doesn't block on the AppleScript
+ * helper. The user sees the bubble + accumulating Notification Center
+ * entry.
+ */
+function notifyMacOS({ title, message, suppress }) {
+  if (suppress) return;
+  if (process.platform !== 'darwin') return;
+  try {
+    const escapeAS = s => String(s == null ? '' : s)
+      .replace(/[\\"]/g, '\\$&')
+      .replace(/[\r\n\t]+/g, ' ')
+      .slice(0, 240); // AppleScript dialog body limit; keep skim-friendly
+    const cmd = `display notification "${escapeAS(message)}" with title "${escapeAS(title)}"`;
+    const child = spawn('osascript', ['-e', cmd], {
+      stdio: 'ignore',
+      detached: true,
+    });
+    child.on('error', () => {}); // swallow ENOENT etc.
+    child.unref();
+  } catch {
+    // Pure best-effort. Never throw.
+  }
 }
 
 function isSunday(isoDate) {
@@ -224,7 +256,9 @@ export async function main(argv = process.argv.slice(2)) {
   const skipDualGate = args.skipDualGate;
   const skipStageB = args.skipStageB;
   const skipAudit = args.skipAudit;
+  const noNotify = args.noNotify || process.env.DREAM_NO_NOTIFY === '1';
   const stageBCommandLine = args.stageBCommand || null;
+  const notifyTitle = `dream-mgmt ${today}`;
 
   // Production audit-bypass guard. --skip-audit and --skip-stage-b weaken
   // the integrity guarantees of the run; in test/dev they're necessary
@@ -262,6 +296,11 @@ export async function main(argv = process.argv.slice(2)) {
         process.stderr.write(`warn: dual-gate SKIP couldn't append to .dream-log.md: ${e.message}\n`);
       }
       process.stdout.write(`[dual-gate] SKIP — ${gate.reason}\n`);
+      notifyMacOS({
+        title: notifyTitle,
+        message: `SKIP — ${gate.reason}`,
+        suppress: noNotify,
+      });
       return 0;
     }
     process.stdout.write(`[dual-gate] PROCEED — ${gate.reason}\n`);
@@ -525,6 +564,13 @@ export async function main(argv = process.argv.slice(2)) {
           stageB: stageBResult,
           sweep: sweepResult,
         });
+        notifyMacOS({
+          title: notifyTitle,
+          message:
+            `FAIL (sweep aborted) — conflicts=${sweepResult.conflicts.length} `
+            + `errors=${sweepResult.errors.length}. Inspect archive/dreams/${today}/staged/`,
+          suppress: noNotify,
+        });
         return 5;
       }
     }
@@ -550,6 +596,30 @@ export async function main(argv = process.argv.slice(2)) {
         process.stderr.write(`warn: weekly digest skipped: ${e.message}\n`);
       }
     }
+
+    // Surface the morning summary. Reads as JJ skims Notification Center:
+    //   - PASS verdict + sweep counts (the happy path)
+    //   - WARN verdict + finding count (Stage A or B flagged something)
+    //   - FAIL verdict + first-finding hint + path-to-evidence
+    const swept = sweepResult ? sweepResult.swept.length : 0;
+    const deleted = sweepResult ? sweepResult.deleted.length : 0;
+    const aFindings = (stageAResult.findings || []).length;
+    const bFindings = (stageBResult.findings || []).length;
+    let notifyMessage;
+    if (finalVerdict === 'PASS') {
+      notifyMessage = `PASS — swept ${swept}, deleted ${deleted}`;
+    } else if (finalVerdict === 'WARN') {
+      notifyMessage = `WARN — Stage A ${aFindings} findings, Stage B ${bFindings}, swept ${swept}`;
+    } else {
+      const first = (stageAResult.findings || stageBResult.findings || [])[0];
+      const hint = first ? first.message.slice(0, 80) : 'audit failed';
+      notifyMessage = `FAIL — ${hint}; see archive/dreams/${today}/`;
+    }
+    notifyMacOS({
+      title: notifyTitle,
+      message: notifyMessage,
+      suppress: noNotify,
+    });
 
     return finalVerdict === 'FAIL' ? 5 : 0;
   } catch (e) {
