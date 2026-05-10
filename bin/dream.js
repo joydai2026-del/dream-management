@@ -42,9 +42,19 @@ import {
   runRebuildIndexes,
   stageRebuildPlan,
 } from '../lib/dream/phase-5-rebuild-indexes.js';
+import { runStageA } from '../lib/dream/stage-a-auditor.js';
+import { runStageB } from '../lib/dream/stage-b-auditor.js';
+import { runSweep, finalizeAuditVerdicts } from '../lib/dream/sweep.js';
+import { checkDualGate, renderSkipLogLine } from '../lib/dream/dual-gate.js';
+import { atomicAppend } from '../lib/atomic-write.js';
 
-const VALUE_FLAGS = new Set(['--memory-root', '--since', '--repo-root', '--today', '--config']);
-const BOOLEAN_FLAGS = new Set(['--dry-run']);
+const VALUE_FLAGS = new Set([
+  '--memory-root', '--since', '--repo-root', '--today', '--config',
+  '--stage-b-command',
+]);
+const BOOLEAN_FLAGS = new Set([
+  '--dry-run', '--skip-dual-gate', '--skip-stage-b', '--skip-audit',
+]);
 const HELP_FLAGS = new Set(['--help', '-h']);
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -128,13 +138,27 @@ export function parseArgs(argv) {
 function usage() {
   return `Usage: dream --memory-root <path> [--dry-run] [--since YYYY-MM-DD]
                   [--repo-root <path>] [--today YYYY-MM-DD]
+                  [--skip-dual-gate] [--skip-stage-b] [--stage-b-command <cmd>]
 
-P4 worker — phase-0 (safety) + phase-1 (replay) + phase-2 (route) + phase-3 (prune) + phase-4 (dates) + phase-5 (rebuild).
-  --memory-root  Required. The agent's memory directory.
-  --dry-run      No mutation: skip git tag and snapshot; still scan replay.
-  --since        Limit session-log scan to dates ≥ this ISO date.
-  --repo-root    Override git repo root (default: detected via git rev-parse).
-  --today        Override the run date (default: local-time today).
+P5 worker — full pipeline: dual-gate → phase-0..5 stage → Stage A → Stage B
+→ sweep → finalize.
+  --memory-root        Required. The agent's memory directory.
+  --dry-run            No mutation: stage but never sweep onto live.
+  --since              Limit session-log scan to dates ≥ this ISO date.
+  --repo-root          Override git repo root (default: detected via git rev-parse).
+  --today              Override the run date (default: local-time today).
+  --skip-dual-gate     Run regardless of cadence-gate (manual debug).
+  --skip-stage-b       Skip Stage B codex audit (use when codex CLI unavailable).
+  --skip-audit         Skip Stage A + Stage B + sweep entirely (test-only).
+  --stage-b-command    Override Stage B command (default: 'codex exec --skip-git-repo-check').
+
+Exit codes:
+  0  success (PASS, WARN, or SKIP)
+  1  usage error
+  2  lock held by another live run
+  3  git-tag conflict
+  4  internal error
+  5  audit FAIL or sweep aborted (live tree intact, staged tree preserved)
 `;
 }
 
@@ -142,6 +166,19 @@ function todayISO(d = new Date()) {
   // Local-time date — not UTC. The dream cadence is a wall-clock 3 AM event.
   const tz = d.getTimezoneOffset() * 60_000;
   return new Date(d.getTime() - tz).toISOString().slice(0, 10);
+}
+
+// Resolve final verdict from Stage A + Stage B outputs. FAIL beats WARN
+// beats PASS. 'skipped' (Stage B not run because Stage A failed or
+// --skip-stage-b) is treated as not contributing to the verdict.
+export function resolveFinalVerdict(stageA, stageB) {
+  const a = stageA?.verdict;
+  const b = stageB?.verdict;
+  if (a === 'FAIL' || b === 'FAIL') return 'FAIL';
+  if (a === 'WARN' || b === 'WARN') return 'WARN';
+  if (a === 'PASS' || b === 'PASS') return 'PASS';
+  // Defensive: unknown verdict labels fail-closed.
+  return 'FAIL';
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -174,6 +211,10 @@ export async function main(argv = process.argv.slice(2)) {
   const memoryRoot = path.resolve(args.memoryRoot);
   const today = args.today || todayISO();
   const dryRun = args.dryRun;
+  const skipDualGate = args.skipDualGate;
+  const skipStageB = args.skipStageB;
+  const skipAudit = args.skipAudit;
+  const stageBCommandLine = args.stageBCommand || null;
 
   let repoRoot = args.repoRoot ? path.resolve(args.repoRoot) : null;
   if (!repoRoot) {
@@ -182,6 +223,24 @@ export async function main(argv = process.argv.slice(2)) {
       process.stderr.write(`error: --memory-root is not inside a git repo; pass --repo-root\n`);
       return 1;
     }
+  }
+
+  // Dual-gate check (skipped on dry-run AND on --skip-dual-gate). Per
+  // ARCHITECTURE.md § 3.1, the launchd plist fires every day at 3am; this
+  // check decides whether to do real work or write a SKIP line + exit 0.
+  if (!dryRun && !skipDualGate) {
+    const gate = await checkDualGate({ memoryRoot });
+    if (!gate.shouldRun) {
+      const skipLine = renderSkipLogLine({ today, gateResult: gate });
+      try {
+        await atomicAppend(path.join(memoryRoot, '.dream-log.md'), skipLine);
+      } catch (e) {
+        process.stderr.write(`warn: dual-gate SKIP couldn't append to .dream-log.md: ${e.message}\n`);
+      }
+      process.stdout.write(`[dual-gate] SKIP — ${gate.reason}\n`);
+      return 0;
+    }
+    process.stdout.write(`[dual-gate] PROCEED — ${gate.reason}\n`);
   }
 
   let lock = null;
@@ -365,14 +424,92 @@ export async function main(argv = process.argv.slice(2)) {
     );
     if (dryRun) {
       process.stdout.write(`[phase-5] DRY-RUN skip stage\n`);
-    } else {
-      const rebuildStage = await stageRebuildPlan({
-        plan: rebuildResult.plan, dreamDir, today,
-      });
-      process.stdout.write(`[phase-5] staged=${rebuildStage.stagedFiles.length}\n`);
+      return 0;
+    }
+    const rebuildStage = await stageRebuildPlan({
+      plan: rebuildResult.plan, dreamDir, today,
+    });
+    process.stdout.write(`[phase-5] staged=${rebuildStage.stagedFiles.length}\n`);
+
+    if (skipAudit) {
+      process.stdout.write(`[audit] SKIPPED (--skip-audit) — staged tree preserved, no sweep\n`);
+      return 0;
     }
 
-    return 0;
+    // ---- AUDIT GATE (Phase 5+) -----------------------------------
+    // Stage A first (deterministic invariants); on FAIL, skip Stage B
+    // and abort sweep. Stage B runs only on Stage A PASS or WARN. Sweep
+    // runs only if both stages produce non-FAIL verdicts.
+
+    await lock.update('stage-a');
+    const stageAResult = await runStageA({ memoryRoot, dreamDir, today });
+    process.stdout.write(
+      `[stage-a] verdict=${stageAResult.verdict} `
+      + `findings=${stageAResult.findings.length} `
+      + `failures=${stageAResult.summary.failures} `
+      + `warnings=${stageAResult.summary.warnings}\n`,
+    );
+
+    let stageBResult = {
+      verdict: 'skipped', findings: [], model: null, summary: null,
+    };
+    if (stageAResult.verdict !== 'FAIL' && !skipStageB) {
+      await lock.update('stage-b');
+      stageBResult = await runStageB({
+        memoryRoot, dreamDir, today,
+        commandLine: stageBCommandLine,
+      });
+      process.stdout.write(
+        `[stage-b] verdict=${stageBResult.verdict} `
+        + `findings=${stageBResult.findings.length}\n`,
+      );
+    } else if (skipStageB) {
+      process.stdout.write(`[stage-b] SKIPPED (--skip-stage-b)\n`);
+      stageBResult = { verdict: 'skipped', findings: [], model: null, summary: { skipped: true } };
+    } else {
+      process.stdout.write(`[stage-b] SKIPPED (Stage A FAIL)\n`);
+    }
+
+    // Final verdict resolution: FAIL > WARN > PASS. SKIPPED stage-b is
+    // treated as PASS (the upstream Stage A FAIL already settled verdict).
+    const finalVerdict = resolveFinalVerdict(stageAResult, stageBResult);
+    let sweepResult = null;
+    if (finalVerdict === 'FAIL') {
+      process.stdout.write(`[sweep] SKIPPED (final verdict=FAIL — staged tree preserved)\n`);
+    } else {
+      await lock.update('sweep');
+      sweepResult = await runSweep({ memoryRoot, dreamDir, today });
+      process.stdout.write(
+        `[sweep] aborted=${sweepResult.aborted} `
+        + `swept=${sweepResult.swept.length} `
+        + `deleted=${sweepResult.deleted.length} `
+        + `conflicts=${sweepResult.conflicts.length} `
+        + `errors=${sweepResult.errors.length}\n`,
+      );
+      if (sweepResult.aborted) {
+        // Sweep aborted post-finalize: surface as FAIL even though audits passed.
+        await finalizeAuditVerdicts({
+          dreamDir,
+          finalVerdict: 'FAIL',
+          stageA: stageAResult,
+          stageB: stageBResult,
+          sweep: sweepResult,
+        });
+        return 5;
+      }
+    }
+
+    await lock.update('finalize');
+    await finalizeAuditVerdicts({
+      dreamDir,
+      finalVerdict,
+      stageA: stageAResult,
+      stageB: stageBResult,
+      sweep: sweepResult,
+    });
+    process.stdout.write(`[finalize] verdict=${finalVerdict}\n`);
+
+    return finalVerdict === 'FAIL' ? 5 : 0;
   } catch (e) {
     if (e instanceof LockHeldError) {
       process.stderr.write(`lock held: ${e.message}\n`);

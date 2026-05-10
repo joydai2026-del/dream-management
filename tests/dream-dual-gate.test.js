@@ -100,15 +100,33 @@ test('checkDualGate: WARN run DOES satisfy gate (treated as successful)', async 
   assert.equal(r.gates.last_run_verdict, 'WARN');
 });
 
-test('checkDualGate: PASS-TENTATIVE is NOT successful (audits incomplete)', async () => {
+test('checkDualGate: PASS-TENTATIVE w/ staged tree present is NOT successful (audits incomplete)', async () => {
   const dir = await tmpDir();
   await placeSession(dir, 'today.md', 0);
   const tentIso = new Date(Date.now() - 1 * 3_600_000).toISOString();
   await placeRun(dir, tentIso.slice(0, 10), 'PASS-TENTATIVE', tentIso);
+  // Place a staged/ dir to indicate sweep didn't complete.
+  await fs.mkdir(
+    path.join(dir, 'archive', 'dreams', tentIso.slice(0, 10), 'staged'),
+    { recursive: true },
+  );
   const r = await checkDualGate({ memoryRoot: dir });
-  // PASS-TENTATIVE skipped → first-run-ever path.
   assert.equal(r.shouldRun, true);
   assert.equal(r.gates.last_run_date, null);
+});
+
+test('checkDualGate: PASS-TENTATIVE-SWEPT (sweep done, finalize crashed) IS successful', async () => {
+  // Codex Phase C #4 regression. If the staged tree is GONE, sweep
+  // committed; treat as last successful run so duplicate runs don't fire.
+  const dir = await tmpDir();
+  await placeSession(dir, 'today.md', 0);
+  const tentIso = new Date(Date.now() - 1 * 3_600_000).toISOString();
+  await placeRun(dir, tentIso.slice(0, 10), 'PASS-TENTATIVE', tentIso);
+  // Do NOT create staged/ — sweep completed, finalize crashed.
+  const r = await checkDualGate({ memoryRoot: dir });
+  // 1h ago → blocks new run.
+  assert.equal(r.shouldRun, false);
+  assert.equal(r.gates.last_run_verdict, 'PASS-TENTATIVE-SWEPT');
 });
 
 test('checkDualGate: most-recent successful run picked from descending dates', async () => {

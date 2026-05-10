@@ -256,17 +256,70 @@ test('listStagedTree: empty dir', async () => {
 
 // ---- timeout / argv contract ----------------------------------------
 
-test('runStageB: stdin is closed (commandRunner contract)', async () => {
-  // Verify the stub is called with the prompt as argv (not stdin).
+test('runStageB: prompt passed as argv positional (not stdin)', async () => {
+  // Verify the stub receives the prompt as a positional, non-empty arg.
+  // The default spawn-based runner uses stdio:['ignore', ...] which closes
+  // stdin; this test asserts the contract by inspecting commandRunner args.
   const dir = await tmpDir();
   const { dreamDir, today } = await scaffoldDream(dir);
-  let stdinUsed = false;
-  const stub = async ({ command, args, prompt }) => {
-    // The contract: prompt is the trailing positional arg, NOT stdin.
-    assert.ok(typeof prompt === 'string' && prompt.length > 0);
+  let receivedPrompt = null;
+  let receivedArgs = null;
+  const stub = async ({ args, prompt }) => {
+    receivedPrompt = prompt;
+    receivedArgs = args;
     return { stdout: PASS_OUTPUT, stderr: '', exitCode: 0 };
   };
   const r = await runStageB({ memoryRoot: dir, dreamDir, today, commandRunner: stub });
   assert.equal(r.verdict, 'PASS');
-  assert.equal(stdinUsed, false);
+  assert.ok(typeof receivedPrompt === 'string', 'prompt arg must be string');
+  assert.ok(receivedPrompt.length > 100, 'prompt must contain template body');
+  assert.ok(Array.isArray(receivedArgs), 'args must be array');
+  // The default command parses to ['exec', '--skip-git-repo-check'] for `codex exec --skip-git-repo-check`.
+  assert.deepEqual(receivedArgs, ['exec', '--skip-git-repo-check']);
+});
+
+// ---- R2 round 2 fixes (Phase C reviewer batch) -----------------------
+
+test('parseStageBOutput: case-insensitive verdict (lowercase)', () => {
+  const r = parseStageBOutput('Verdict: pass\nMODEL: gpt-5\n\nFINDINGS:\n');
+  assert.equal(r.parseOk, true);
+  assert.equal(r.verdict, 'PASS');
+});
+
+test('parseStageBOutput: code-fenced response', () => {
+  const fenced = '```\nVERDICT: WARN\nFINDINGS:\n- severity: warn\n  message: x\n  category: structural\n  path: null\n```';
+  const r = parseStageBOutput(fenced);
+  assert.equal(r.parseOk, true);
+  assert.equal(r.verdict, 'WARN');
+  assert.equal(r.findings.length, 1);
+});
+
+test('parseStageBOutput: thinking preamble before VERDICT', () => {
+  const text = 'Let me think about this...\nThe staged tree looks good.\n\nVERDICT: PASS\nMODEL: gpt-5-codex\n';
+  const r = parseStageBOutput(text);
+  assert.equal(r.parseOk, true);
+  assert.equal(r.verdict, 'PASS');
+});
+
+test('runStageB: parses VERDICT from stderr when stdout empty (codex variant)', async () => {
+  const dir = await tmpDir();
+  const { dreamDir, today } = await scaffoldDream(dir);
+  // Some codex CLI versions emit response on stderr. Combined parser must
+  // pick it up.
+  const stub = async () => ({ stdout: '', stderr: PASS_OUTPUT, exitCode: 0 });
+  const r = await runStageB({ memoryRoot: dir, dreamDir, today, commandRunner: stub });
+  assert.equal(r.verdict, 'PASS');
+});
+
+test('listStagedTree: truncates at 500 entries with footer notice', async () => {
+  const dir = await tmpDir();
+  // Create 600 fake files.
+  for (let i = 0; i < 600; i++) {
+    await writeFile(path.join(dir, `f${String(i).padStart(4, '0')}.md`), 'x');
+  }
+  const out = await _internals.listStagedTree(dir);
+  assert.match(out, /truncated at 500/);
+  // Line count should be ≤501 (500 entries + 1 footer).
+  const lineCount = out.split('\n').length;
+  assert.ok(lineCount <= 502, `expected ≤501 lines, got ${lineCount}`);
 });

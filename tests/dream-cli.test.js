@@ -42,9 +42,20 @@ async function setupMemoryRoot(today = '2026-05-09') {
   return dir;
 }
 
-async function runCli(args) {
+// P5 wire-up note: runCli auto-injects --skip-dual-gate + --skip-stage-b
+// for existing tests so they exercise phases 0-5 + Stage A + sweep
+// without requiring session-log seeding or codex CLI availability.
+// Tests that want to exercise dual-gate / Stage B can opt out via
+// { rawArgs: true }.
+async function runCli(args, opts = {}) {
+  const augmented = opts.rawArgs ? args : [
+    ...args,
+    ...(args.includes('--skip-dual-gate') ? [] : ['--skip-dual-gate']),
+    ...(args.includes('--skip-stage-b') ? [] : ['--skip-stage-b']),
+    ...(args.includes('--skip-audit') ? [] : ['--skip-audit']),
+  ];
   try {
-    const r = await exec('node', [BIN, ...args]);
+    const r = await exec('node', [BIN, ...augmented]);
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
   } catch (e) {
     return { code: e.code, stdout: e.stdout || '', stderr: e.stderr || '' };
