@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd plist template for the dream-management nightly worker.
+
+  Install:
+    sed -e 's|{{NODE_BIN}}|/opt/homebrew/bin/node|g' \
+        -e 's|{{DREAM_BIN}}|/Users/joyd/dev/dream-management/bin/dream.js|g' \
+        -e 's|{{MEMORY_ROOT}}|/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4|g' \
+        -e 's|{{LABEL}}|com.jj.dream|g' \
+        schedulers/launchd.plist.template > ~/Library/LaunchAgents/com.jj.dream.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jj.dream.plist
+    launchctl enable gui/$(id -u)/com.jj.dream
+
+  Verify:
+    launchctl list | grep com.jj.dream
+    plutil -lint ~/Library/LaunchAgents/com.jj.dream.plist
+
+  Schedule semantics: 03:00 local time, daily. The dream worker itself
+  enforces dual-gate (≥24h since last + ≥1 session in 24h); when the gate
+  fires SKIP, the worker writes a `## YYYY-MM-DD 03:00 SKIP — <reason>`
+  line to .dream-log.md and exits 0.
+
+  PATH includes /opt/homebrew/bin per the 2026-04-19 wiki-daemon fix —
+  launchd's default PATH excludes Homebrew binaries, which silently broke
+  raw-sweep for 9 days. Same lesson applies here: codex CLI (Stage B)
+  lives under /opt/homebrew/bin or similar; without this, Stage B fails
+  with "command not found" and the auditor verdict is FAIL by exit code.
+
+  Catch-up: launchd does NOT run missed events while the Mac was asleep
+  (RunAtLoad: false). The dual-gate handles "missed yesterday" by simply
+  letting today's run cover the missed window — its threshold of 24h
+  since last successful run accommodates 25-30h gaps from sleep.
+
+  StandardOutPath / StandardErrorPath: capture worker output for
+  postmortem. The launchd-running user must have write access to the
+  parent dir; default below is the agent dir, which is JJ's vault folder.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{{LABEL}}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{NODE_BIN}}</string>
+        <string>{{DREAM_BIN}}</string>
+        <string>--memory-root</string>
+        <string>{{MEMORY_ROOT}}</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>{{MEMORY_ROOT}}/.dream-launchd.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>{{MEMORY_ROOT}}/.dream-launchd.err.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>{{MEMORY_ROOT}}</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>Nice</key>
+    <integer>10</integer>
+</dict>
+</plist>
