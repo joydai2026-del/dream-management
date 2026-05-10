@@ -57,7 +57,7 @@ const VALUE_FLAGS = new Set([
 ]);
 const BOOLEAN_FLAGS = new Set([
   '--dry-run', '--skip-dual-gate', '--skip-stage-b', '--skip-audit',
-  '--no-notify', '--no-telegram',
+  '--no-notify', '--no-telegram', '--test-notify',
 ]);
 const HELP_FLAGS = new Set(['--help', '-h']);
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -156,6 +156,8 @@ P5 worker — full pipeline: dual-gate → phase-0..5 stage → Stage A → Stag
   --skip-audit         Skip Stage A + Stage B + sweep entirely (test-only).
   --no-notify          Suppress ALL notifications (macOS + Telegram) at end of run.
   --no-telegram        Suppress just Telegram (keep macOS bubble).
+  --test-notify        Fire one test notification + exit 0 (no vault access).
+                       Use to verify TELEGRAM_* env vars after install.
   --stage-b-command    Override Stage B command (default: 'codex exec --skip-git-repo-check').
 
 Notification env vars (read by the worker):
@@ -306,6 +308,32 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(usage());
     return 0;
   }
+
+  // --test-notify: fire one notification through the full notify path
+  // (macOS bubble + Telegram if configured) and exit. Useful for verifying
+  // that TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / TELEGRAM_THREAD_ID env
+  // wiring is correct after install. No vault access; --memory-root is
+  // optional in this mode. Checked BEFORE --memory-root validation so
+  // operators can run it without scaffolding a fake vault.
+  if (args.testNotify) {
+    const today = args.today || todayISO();
+    const message =
+      `TEST — notification path is wired. `
+      + `If you see this in Telegram + macOS Notification Center, you're set.`;
+    process.stdout.write(`[test-notify] firing notification\n`);
+    process.stdout.write(`  TELEGRAM_BOT_TOKEN: ${process.env.TELEGRAM_BOT_TOKEN ? '<set>' : '<unset>'}\n`);
+    process.stdout.write(`  TELEGRAM_CHAT_ID:   ${process.env.TELEGRAM_CHAT_ID || '<unset>'}\n`);
+    process.stdout.write(`  TELEGRAM_THREAD_ID: ${process.env.TELEGRAM_THREAD_ID || '<unset>'}\n`);
+    await notifyAll({
+      title: `dream-mgmt ${today} (test)`,
+      message,
+      suppress: false,
+      suppressTelegram: false,
+    });
+    process.stdout.write(`[test-notify] sent (best-effort; check Telegram + Notification Center)\n`);
+    return 0;
+  }
+
   if (!args.memoryRoot) {
     process.stderr.write(`error: --memory-root required\n${usage()}`);
     return 1;
@@ -314,6 +342,7 @@ export async function main(argv = process.argv.slice(2)) {
     process.stderr.write(`error: unknown args: ${args._unknown.join(' ')}\n`);
     return 1;
   }
+
   if (args.today && !ISO_DATE_RE.test(args.today)) {
     process.stderr.write(`error: --today must match YYYY-MM-DD; got '${args.today}'\n`);
     return 1;
