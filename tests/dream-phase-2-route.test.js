@@ -296,6 +296,21 @@ test('applyPromotionGates: NaN importance declined cleanly', () => {
   assert.match(declined[0].reason, /importance=not-a-number/);
 });
 
+test('applyPromotionGates: Symbol importance does not crash gate batch', () => {
+  // Reality-checker R2 N4: Number(Symbol()) throws TypeError. Defend so a
+  // pathological caller can't take down the whole nightly run.
+  const cs = [{
+    slug: 'symbol-test', importance: Symbol('x'), journalMentions: 4,
+    evidence: [{ path: 'p', lineNumber: 1 }],
+  }];
+  const { promote, declined } = applyPromotionGates(cs, {
+    activePatterns: [], firingEntries: [],
+  });
+  assert.equal(promote.length, 0);
+  assert.equal(declined.length, 1);
+  assert.match(declined[0].reason, /importance=/);
+});
+
 test('applyPromotionGates: 0 candidates returns empty', () => {
   const out = applyPromotionGates([], { activePatterns: [], firingEntries: [] });
   assert.deepEqual(out, { promote: [], declined: [] });

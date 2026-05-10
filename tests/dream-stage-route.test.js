@@ -246,6 +246,32 @@ test('replaceOrAppendFooter replaces existing block (no accumulation)', () => {
   assert.equal((out.match(/DREAM-FOOTER-END/g) || []).length, 1);
 });
 
+test('replaceOrAppendFooter does NOT touch START/END markers embedded mid-file as prose', () => {
+  // Reality-checker R2 N2: a pattern that documents the dream system might
+  // legitimately contain `<!-- DREAM-FOOTER-START -->` in its body. The
+  // replace path should only target the trailing footer block.
+  const seeded = [
+    '# Documentation pattern',
+    '',
+    'Example body containing the markers as prose:',
+    '',
+    '<!-- DREAM-FOOTER-START -->',
+    'This is example prose, NOT a real footer.',
+    '<!-- DREAM-FOOTER-END -->',
+    '',
+    'More body content after the prose example.',
+    '',
+  ].join('\n');
+  const out = replaceOrAppendFooter(seeded, ['<!-- new -->']);
+  // The prose markers survive
+  assert.match(out, /This is example prose, NOT a real footer\./);
+  assert.match(out, /More body content after the prose example\./);
+  // A new footer block was appended at the end
+  assert.match(out, /<!-- new -->\n<!-- DREAM-FOOTER-END -->\n$/);
+  // Two pairs total: the prose pair + the appended trailing footer
+  assert.equal((out.match(/DREAM-FOOTER-START/g) || []).length, 2);
+});
+
 test('replaceOrAppendFooter is idempotent across repeated reinforcements', () => {
   let s = '# Title\n\nbody\n';
   s = replaceOrAppendFooter(s, ['<!-- run 1 -->']);
@@ -355,6 +381,9 @@ test('stageRoutePlan: fromReference falls back to skeleton when reference file m
 
 test('stageRoutePlan: removeReference produces a JSON tombstone in staged tree', async () => {
   const root = await tmpDir();
+  // Provide a live reference file so target_missing is false
+  await fs.mkdir(path.join(root, 'patterns', 'reference'), { recursive: true });
+  await fs.writeFile(path.join(root, 'patterns', 'reference', 'foo.md'), 'body');
   const dreamDir = path.join(root, 'archive', 'dreams', '2026-05-10');
   const plan = {
     today: '2026-05-10',
@@ -373,6 +402,28 @@ test('stageRoutePlan: removeReference produces a JSON tombstone in staged tree',
   assert.equal(json.removed_path, 'patterns/reference/foo.md');
   assert.equal(json.reason, 'unit test');
   assert.equal(json.promotion_run, 'dream/pre/2026-05-10');
+  assert.equal(json.target_missing, false);
+});
+
+test('stageRoutePlan: tombstone records target_missing=true when ref file gone', async () => {
+  // Reality-checker R2 N1: the candidate was built with referenceFrontmatter
+  // but the file was deleted before staging — the tombstone honestly records
+  // that the sweep step will no-op rather than silently implying a removal.
+  const root = await tmpDir();
+  // No live reference file exists
+  const dreamDir = path.join(root, 'archive', 'dreams', '2026-05-10');
+  const plan = {
+    today: '2026-05-10',
+    reinforce: [],
+    promote: [],
+    removeReference: [{ slug: 'gone', path: 'patterns/reference/gone.md' }],
+    declined: [],
+  };
+  const { stagedFiles } = await stageRoutePlan({
+    plan, dreamDir, memoryRoot: root, today: '2026-05-10',
+  });
+  const json = JSON.parse(await fs.readFile(stagedFiles[0], 'utf8'));
+  assert.equal(json.target_missing, true);
 });
 
 test('stageRoutePlan: reinforcement footer replaces (does not accumulate) across runs', async () => {
