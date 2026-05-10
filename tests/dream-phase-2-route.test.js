@@ -220,3 +220,121 @@ test('runRoute combines reinforcement + promotion + summary', () => {
 test('runRoute requires today', () => {
   assert.throws(() => runRoute({ scoredInsights: [], activePatterns: [] }), /today required/);
 });
+
+// --- R2 fixes ---
+
+test('insightMentionsPattern: kebab-token-majority fallback fires on prose phrasing', () => {
+  // Reality-checker R1 F3: "DOM drift broke the walker" should match
+  // `external-dom-drift-llm-default` when no trigger_phrases declared.
+  const pat = { name: 'external-dom-drift-llm-default', identifierStem: 'external-dom-drift-llm-default' };
+  assert.equal(insightMentionsPattern({ text: 'DOM drift broke the walker' }, pat), true);
+  assert.equal(insightMentionsPattern({ text: 'DOM rebroke the walker' }, pat), false); // only 1 token
+  assert.equal(insightMentionsPattern({ text: 'we used llm and default mode' }, pat), true); // llm + default
+});
+
+test('insightMentionsPattern: 1-token identifiers do NOT trigger fallback (must use full stem)', () => {
+  const pat = { name: 'caveman', identifierStem: 'caveman' };
+  assert.equal(insightMentionsPattern({ text: 'caveman approach' }, pat), true);  // stem hit
+  assert.equal(insightMentionsPattern({ text: 'unrelated text' }, pat), false);
+});
+
+test('insightMentionsPattern: word-boundary respect (no substring of unrelated word)', () => {
+  const pat = { name: 'drift-mode', identifierStem: 'drift-mode' };
+  assert.equal(insightMentionsPattern({ text: 'drift mode engaged' }, pat), true);
+  // "drifted modeled" has both `drift` and `mode` AS SUBSTRINGS but not as
+  // bounded tokens. Word-boundary regex blocks the false match.
+  assert.equal(insightMentionsPattern({ text: 'drifted modeled' }, pat), false);
+});
+
+test('applyPromotionGates: importance gate isolated (sole reason)', () => {
+  const cs = [{
+    slug: 'foo', importance: 5, journalMentions: 10,
+    evidence: [{ path: 'p', lineNumber: 1 }],
+  }];
+  const { promote, declined } = applyPromotionGates(cs, {
+    activePatterns: [], firingEntries: [],
+  });
+  assert.equal(promote.length, 0);
+  assert.match(declined[0].reason, /importance=5 < min=7/);
+  assert.equal(declined[0].reason.includes('weighted_evidence'), false);
+});
+
+test('applyPromotionGates: source citation gate isolated', () => {
+  const cs = [{
+    slug: 'foo', importance: 9, journalMentions: 10,
+    evidence: [], // empty
+  }];
+  const { promote, declined } = applyPromotionGates(cs, {
+    activePatterns: [], firingEntries: [],
+  });
+  assert.equal(promote.length, 0);
+  assert.match(declined[0].reason, /no source citation/);
+});
+
+test('applyPromotionGates: numeric coercion on string importance / journalMentions', () => {
+  const cs = [{
+    slug: 'foo', importance: '9', journalMentions: '4',
+    evidence: [{ path: 'p', lineNumber: 1 }],
+  }];
+  const { promote } = applyPromotionGates(cs, {
+    activePatterns: [], firingEntries: [],
+  });
+  assert.equal(promote.length, 1);
+  assert.equal(promote[0].importance, 9);
+  assert.equal(promote[0].journalMentions, 4);
+});
+
+test('applyPromotionGates: NaN importance declined cleanly', () => {
+  const cs = [{
+    slug: 'foo', importance: 'not-a-number', journalMentions: 4,
+    evidence: [{ path: 'p', lineNumber: 1 }],
+  }];
+  const { promote, declined } = applyPromotionGates(cs, {
+    activePatterns: [], firingEntries: [],
+  });
+  assert.equal(promote.length, 0);
+  assert.match(declined[0].reason, /importance=not-a-number/);
+});
+
+test('applyPromotionGates: 0 candidates returns empty', () => {
+  const out = applyPromotionGates([], { activePatterns: [], firingEntries: [] });
+  assert.deepEqual(out, { promote: [], declined: [] });
+});
+
+test('runRoute: fromReference promotion produces removeReference entry', () => {
+  const result = runRoute({
+    today: '2026-05-10',
+    scoredInsights: [],
+    activePatterns: [],
+    promotionCandidates: [{
+      slug: 'foo',
+      importance: 9,
+      journalMentions: 4,
+      evidence: [{ path: 'p', lineNumber: 1 }],
+      referenceFrontmatter: { bootstrap: true, demotion_phase: 'p3-2026-05-09' },
+    }],
+    firingEntries: [],
+  });
+  assert.equal(result.plan.promote.length, 1);
+  assert.equal(result.plan.promote[0].fromReference, true);
+  assert.equal(result.plan.removeReference.length, 1);
+  assert.equal(result.plan.removeReference[0].slug, 'foo');
+  assert.equal(result.plan.removeReference[0].path, 'patterns/reference/foo.md');
+});
+
+test('runRoute: net-new promotion (no reference) does NOT produce removeReference', () => {
+  const result = runRoute({
+    today: '2026-05-10',
+    scoredInsights: [],
+    activePatterns: [],
+    promotionCandidates: [{
+      slug: 'fresh',
+      importance: 9,
+      journalMentions: 4,
+      evidence: [{ path: 'p', lineNumber: 1 }],
+    }],
+    firingEntries: [],
+  });
+  assert.equal(result.plan.promote[0].fromReference, false);
+  assert.deepEqual(result.plan.removeReference, []);
+});

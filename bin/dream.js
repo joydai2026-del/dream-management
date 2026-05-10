@@ -228,15 +228,13 @@ export async function main(argv = process.argv.slice(2)) {
     const scored = await scoreAll(insights, scoreHeuristic);
     const activePatterns = await loadPatterns(memoryRoot, 'active');
 
-    let firingEntries = [];
-    try {
-      firingEntries = await readAllEntries({
-        logPath: path.join(memoryRoot, 'pattern-firing-log.md'),
-        archiveDir: path.join(memoryRoot, 'archive', 'firing-logs'),
-      });
-    } catch {
-      firingEntries = [];
-    }
+    // Reviewer R1: bare catch hid corruption / permission errors and silently
+    // disabled promotion. readAllEntries already returns [] for ENOENT, so the
+    // outer catch only runs on real failures — surface them.
+    const firingEntries = await readAllEntries({
+      logPath: path.join(memoryRoot, 'pattern-firing-log.md'),
+      archiveDir: path.join(memoryRoot, 'archive', 'firing-logs'),
+    });
 
     const { plan, summary } = runRoute({
       today,

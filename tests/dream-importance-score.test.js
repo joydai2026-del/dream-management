@@ -79,3 +79,65 @@ test('createOllamaScorer falls back to heuristic on timeout', async () => {
   assert.ok(r.score >= 9);
   assert.match(r.rationale, /(error|HTTP)/);
 });
+
+test('createOllamaScorer: success path parses score + rationale from API response', async () => {
+  // Reviewer R1 (test-automator): the happy path was untested. Spin up a
+  // minimal HTTP server that mimics Ollama's /api/generate JSON contract.
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        response: JSON.stringify({ score: 8, rationale: 'critical correction signal' }),
+      }));
+    });
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const scorer = createOllamaScorer({ url: `http://127.0.0.1:${port}/api/generate`, timeoutMs: 5000 });
+    const r = await scorer(makeInsight('mistake', 'plain note'));
+    assert.equal(r.score, 8);
+    assert.match(r.rationale, /critical correction signal/);
+    assert.match(r.rationale, /ollama:/);
+  } finally {
+    await new Promise(r => server.close(r));
+  }
+});
+
+test('createOllamaScorer: HTTP non-200 falls back to heuristic with explicit rationale', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    res.writeHead(503).end('upstream busy');
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const scorer = createOllamaScorer({ url: `http://127.0.0.1:${port}/api/generate`, timeoutMs: 5000 });
+    const r = await scorer(makeInsight('correction', 'plain note'));
+    assert.equal(r.score, 8); // heuristic for correction bucket
+    assert.match(r.rationale, /ollama HTTP 503/);
+  } finally {
+    await new Promise(r => server.close(r));
+  }
+});
+
+test('createOllamaScorer: out-of-range score is clamped, not fallback', async () => {
+  const http = await import('node:http');
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ response: JSON.stringify({ score: 99, rationale: 'hot' }) }));
+  });
+  await new Promise(r => server.listen(0, '127.0.0.1', r));
+  const port = server.address().port;
+  try {
+    const scorer = createOllamaScorer({ url: `http://127.0.0.1:${port}/api/generate`, timeoutMs: 5000 });
+    const r = await scorer(makeInsight('mistake', 'plain note'));
+    assert.equal(r.score, 10); // clamped, not fallback
+    assert.match(r.rationale, /ollama:/);
+  } finally {
+    await new Promise(r => server.close(r));
+  }
+});

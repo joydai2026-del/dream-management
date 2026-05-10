@@ -99,3 +99,53 @@ test('parseScalars: coerces ints, bools, leaves strings', () => {
   assert.equal(out.flag, false);
   assert.equal(out.phase, 'p3-2026-05-09');
 });
+
+test('parseScalars: strips YAML inline comments from scalar values', () => {
+  // Reality-checker R1 F4: `sightings: 11  # bumped` previously parsed as a
+  // string and was coerced to 0, silently corrupting the next reinforcement.
+  const out = _internals.parseScalars([
+    'title: t  # main title',
+    'sightings: 11  # bumped manually',
+    'bootstrap: true # one-time concession',
+    'phase: p3-2026-05-09',
+  ].join('\n'));
+  assert.equal(out.title, 't');
+  assert.equal(out.sightings, 11);
+  assert.equal(out.bootstrap, true);
+  assert.equal(out.phase, 'p3-2026-05-09');
+});
+
+test('parseScalars: preserves # inside quoted strings', () => {
+  const out = _internals.parseScalars([
+    'title: "value # with hash"',
+    "name: 'a # b'",
+  ].join('\n'));
+  assert.equal(out.title, 'value # with hash');
+  assert.equal(out.name, 'a # b');
+});
+
+test('parseScalars: handles inline list with no outer comment', () => {
+  const out = _internals.parseScalars('phrases: [foo, "bar baz"]');
+  assert.deepEqual(out.phrases, ['foo', 'bar baz']);
+});
+
+test('parseScalars: strips inline comments from indented list items', () => {
+  const out = _internals.parseScalars([
+    'trigger_phrases:',
+    '  - caveman check  # canonical',
+    "  - 'plain language # not a comment'",
+    '  - 10-second skim',
+  ].join('\n'));
+  assert.deepEqual(out.trigger_phrases, [
+    'caveman check',
+    'plain language # not a comment',
+    '10-second skim',
+  ]);
+});
+
+test('stripInlineComment: only fires on `space-#`, not bare `#`', () => {
+  assert.equal(_internals.stripInlineComment('11  # comment'), '11 ');
+  assert.equal(_internals.stripInlineComment('#tag'), '#tag');
+  assert.equal(_internals.stripInlineComment('"quoted # value"'), '"quoted # value"');
+  assert.equal(_internals.stripInlineComment(''), '');
+});

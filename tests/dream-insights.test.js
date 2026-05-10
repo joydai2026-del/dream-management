@@ -76,3 +76,38 @@ test('collectInsights returns [] for null/empty input', () => {
   assert.deepEqual(collectInsights(null), []);
   assert.deepEqual(collectInsights({}), []);
 });
+
+test('collectInsights skips session entries with non-array markers', () => {
+  // Code-reviewer R1: defensive guard; phase-1-replay never emits this shape
+  // today, but a future change shouldn't crash routing.
+  const replay = {
+    today: '2026-05-10',
+    journal: { found: false, path: null, entries: [] },
+    sessionLogs: {
+      scanned: 1,
+      withMarkers: 0,
+      entries: [
+        { date: '2026-05-09', name: '2026-05-09.md', path: '/x/2026-05-09.md', markers: undefined },
+        { date: '2026-05-08', name: '2026-05-08.md', path: '/x/2026-05-08.md' /* markers omitted */ },
+      ],
+    },
+  };
+  assert.deepEqual(collectInsights(replay), []);
+});
+
+test('collectInsights collapses unknown journal categories to "other" (no silent drop)', () => {
+  const replay = {
+    today: '2026-05-10',
+    journal: {
+      found: true,
+      path: '/p/learning-journals/2026-05-10.md',
+      entries: [
+        { time: '09:00', category: 'unknown-tag', bucket: 'Other', summary: 'mystery' },
+      ],
+    },
+    sessionLogs: { scanned: 0, withMarkers: 0, entries: [] },
+  };
+  const out = collectInsights(replay);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].bucket, 'other');
+});
