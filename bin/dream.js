@@ -34,6 +34,10 @@ import { stageRoutePlan } from '../lib/dream/stage-route.js';
 import { loadPatterns } from '../lib/dream/load-patterns.js';
 import { readAllEntries } from '../lib/firing-log-read.js';
 import { runPrune, stagePrunePlan } from '../lib/dream/phase-3-prune.js';
+import {
+  runDatesContradictions,
+  stageDatesContradictionsPlan,
+} from '../lib/dream/phase-4-dates-contradictions.js';
 
 const VALUE_FLAGS = new Set(['--memory-root', '--since', '--repo-root', '--today', '--config']);
 const BOOLEAN_FLAGS = new Set(['--dry-run']);
@@ -121,7 +125,7 @@ function usage() {
   return `Usage: dream --memory-root <path> [--dry-run] [--since YYYY-MM-DD]
                   [--repo-root <path>] [--today YYYY-MM-DD]
 
-P4 worker — phase-0 (safety) + phase-1 (replay) + phase-2 (route) + phase-3 (prune).
+P4 worker — phase-0 (safety) + phase-1 (replay) + phase-2 (route) + phase-3 (prune) + phase-4 (dates).
   --memory-root  Required. The agent's memory directory.
   --dry-run      No mutation: skip git tag and snapshot; still scan replay.
   --since        Limit session-log scan to dates ≥ this ISO date.
@@ -284,6 +288,25 @@ export async function main(argv = process.argv.slice(2)) {
       if (pruneStage.stagedFiles.length > 0) {
         process.stdout.write(`[phase-3] staged=${pruneStage.stagedFiles.length}\n`);
       }
+    }
+
+    // Phase 4 — CONTRADICTIONS + DATES. Sweep relative-date phrases in
+    // hot-tier files to ISO YYYY-MM-DD. Contradiction detection is a stub
+    // for now (real detection is wired alongside the P5 dream-log writer).
+    await lock.update('phase-4-dates-contradictions');
+    const datesResult = await runDatesContradictions({ memoryRoot, today });
+    process.stdout.write(
+      `[phase-4] dates files=${datesResult.summary.filesWithReplacements} `
+      + `replacements=${datesResult.summary.totalReplacements} `
+      + `contradictions=${datesResult.summary.contradictionCount}\n`,
+    );
+    if (dryRun) {
+      process.stdout.write(`[phase-4] DRY-RUN skip stage\n`);
+    } else if (datesResult.plan.byFile.length > 0) {
+      const datesStage = await stageDatesContradictionsPlan({
+        plan: datesResult.plan, dreamDir, memoryRoot, today,
+      });
+      process.stdout.write(`[phase-4] staged=${datesStage.stagedFiles.length}\n`);
     }
 
     return 0;
