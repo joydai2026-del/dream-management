@@ -115,6 +115,35 @@ test('checkDualGate: PASS-TENTATIVE w/ staged tree present is NOT successful (au
   assert.equal(r.gates.last_run_date, null);
 });
 
+test('checkDualGate: FAIL-WITH-STAGED (sweep aborted) blocks new run with recovery hint', async () => {
+  // Codex final review: sweep-abort recovery state must block the next
+  // launchd tick so JJ can inspect the staged tree.
+  const dir = await tmpDir();
+  await placeSession(dir, 'today.md', 0);
+  const failIso = new Date(Date.now() - 12 * 3_600_000).toISOString();
+  const failDate = failIso.slice(0, 10);
+  await placeRun(dir, failDate, 'FAIL', failIso);
+  // Preserve staged tree to indicate aborted sweep.
+  await fs.mkdir(path.join(dir, 'archive', 'dreams', failDate, 'staged'), { recursive: true });
+  const r = await checkDualGate({ memoryRoot: dir });
+  assert.equal(r.shouldRun, false);
+  assert.match(r.reason, /aborted with staged tree preserved/);
+  assert.equal(r.gates.last_run_verdict, 'FAIL-WITH-STAGED');
+});
+
+test('checkDualGate: FAIL run WITHOUT staged tree falls through to normal cold-start logic', async () => {
+  // FAIL with no staged → recovery already happened OR sweep never started.
+  // findLastSuccessfulRun returns null in that case (FAIL-without-staged
+  // doesn't satisfy "successful"); checkDualGate proceeds normally.
+  const dir = await tmpDir();
+  await placeSession(dir, 'today.md', 0);
+  const failIso = new Date(Date.now() - 12 * 3_600_000).toISOString();
+  await placeRun(dir, failIso.slice(0, 10), 'FAIL', failIso);
+  // No staged dir.
+  const r = await checkDualGate({ memoryRoot: dir });
+  assert.equal(r.shouldRun, true);
+});
+
 test('checkDualGate: PASS-TENTATIVE-SWEPT (sweep done, finalize crashed) IS successful', async () => {
   // Codex Phase C #4 regression. If the staged tree is GONE, sweep
   // committed; treat as last successful run so duplicate runs don't fire.

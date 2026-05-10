@@ -46,6 +46,8 @@ import { runStageA } from '../lib/dream/stage-a-auditor.js';
 import { runStageB } from '../lib/dream/stage-b-auditor.js';
 import { runSweep, finalizeAuditVerdicts } from '../lib/dream/sweep.js';
 import { checkDualGate, renderSkipLogLine } from '../lib/dream/dual-gate.js';
+import { detectContradictions } from '../lib/dream/contradiction-detector.js';
+import { generateWeeklyDigest } from '../lib/dream/weekly-digest.js';
 import { atomicAppend } from '../lib/atomic-write.js';
 
 const VALUE_FLAGS = new Set([
@@ -168,6 +170,14 @@ function todayISO(d = new Date()) {
   return new Date(d.getTime() - tz).toISOString().slice(0, 10);
 }
 
+function isSunday(isoDate) {
+  // Local-time check: a YYYY-MM-DD parsed via Date treats it as UTC midnight,
+  // which is Sunday-shifted in some zones. Reconstruct as local-time noon to
+  // sidestep DST + UTC drift; the only thing we need is the day-of-week.
+  const [y, m, d] = isoDate.split('-').map(Number);
+  return new Date(y, m - 1, d, 12).getDay() === 0;
+}
+
 // Resolve final verdict from Stage A + Stage B outputs. FAIL beats WARN
 // beats PASS. 'skipped' (Stage B not run because Stage A failed or
 // --skip-stage-b) is treated as not contributing to the verdict.
@@ -215,6 +225,20 @@ export async function main(argv = process.argv.slice(2)) {
   const skipStageB = args.skipStageB;
   const skipAudit = args.skipAudit;
   const stageBCommandLine = args.stageBCommand || null;
+
+  // Production audit-bypass guard. --skip-audit and --skip-stage-b weaken
+  // the integrity guarantees of the run; in test/dev they're necessary
+  // (no codex CLI in CI), but in production they're foot-guns. Require
+  // DREAM_ALLOW_AUDIT_BYPASS=1 to use either flag outside dry-run mode.
+  // Without the env var, surface a usage error and exit 1.
+  if ((skipAudit || skipStageB) && !dryRun
+      && process.env.DREAM_ALLOW_AUDIT_BYPASS !== '1') {
+    process.stderr.write(
+      `error: --skip-audit and --skip-stage-b weaken integrity; set `
+      + `DREAM_ALLOW_AUDIT_BYPASS=1 to enable, or pass --dry-run.\n`,
+    );
+    return 1;
+  }
 
   let repoRoot = args.repoRoot ? path.resolve(args.repoRoot) : null;
   if (!repoRoot) {
@@ -382,12 +406,18 @@ export async function main(argv = process.argv.slice(2)) {
       excludePaths: phase3DemotionPaths,
       preStaged,
     });
-    const contradictionsLabel = datesResult.summary.contradictionsStub
-      ? 'stub' : String(datesResult.summary.contradictionCount);
+    // Phase D wire-up: detectContradictions reads firingLog and surfaces
+    // recurrent rule violations as contradictions. Splice into the Phase 4
+    // plan so Phase 5 emits them through event.json.contradictions_surfaced
+    // and dream-log-entry.md. Replaces the Phase 4 stub.
+    const contradictionResult = detectContradictions({ firingEntries });
+    datesResult.plan.contradictions = contradictionResult.contradictions;
+    datesResult.summary.contradictionCount = contradictionResult.contradictions.length;
+    datesResult.summary.contradictionsStub = false;
     process.stdout.write(
       `[phase-4] dates files=${datesResult.summary.filesWithReplacements} `
       + `replacements=${datesResult.summary.totalReplacements} `
-      + `contradictions=${contradictionsLabel}\n`,
+      + `contradictions=${datesResult.summary.contradictionCount}\n`,
     );
     if (dryRun) {
       process.stdout.write(`[phase-4] DRY-RUN skip stage\n`);
@@ -508,6 +538,18 @@ export async function main(argv = process.argv.slice(2)) {
       sweep: sweepResult,
     });
     process.stdout.write(`[finalize] verdict=${finalVerdict}\n`);
+
+    // Weekly digest: refresh dream-log-weekly.md on Sundays (or whenever
+    // the worker fires on a Sunday by local-time). Best-effort — failure
+    // here doesn't fail the run; observability is non-critical.
+    if (isSunday(today)) {
+      try {
+        const digest = await generateWeeklyDigest({ memoryRoot, today });
+        process.stdout.write(`[digest] wrote ${digest.path} (${digest.summary.runs} runs)\n`);
+      } catch (e) {
+        process.stderr.write(`warn: weekly digest skipped: ${e.message}\n`);
+      }
+    }
 
     return finalVerdict === 'FAIL' ? 5 : 0;
   } catch (e) {

@@ -50,17 +50,31 @@ test('evalHeuristic: per-bucket stats include mean + stddev', () => {
   assert.equal(r.per_bucket.mistake.count, 1);
 });
 
-test('evalHeuristic: drift detection — all "high" miss below high band', () => {
+test('evalHeuristic: drift detection — n>=3 high fixtures all miss below high band', () => {
   // Construct fixtures where heuristic under-scores. The heuristic gives
   // base 4 to bucket=other, so a fixture labeled high but text is plain
   // should miss to low or mid.
   const fxs = [
     fixture('a', 'other', 'plain text, no signal words', 'high'),
     fixture('b', 'other', 'plain text two', 'high'),
+    fixture('c', 'other', 'plain text three', 'high'),
   ];
   const r = evalHeuristic({ fixtures: fxs });
   assert.equal(r.calibration.drift_detected, true);
   assert.ok(r.calibration.notes.some(n => /under-scores severity/.test(n)));
+});
+
+test('evalHeuristic: drift detection NOT triggered on n=1 high fixture (sample-size gate)', () => {
+  // Single fixture isn't enough evidence for "all high fixtures miss"
+  // — code-reviewer flagged false-positive on small samples.
+  const fxs = [
+    fixture('a', 'other', 'plain text, no signal words', 'high'),
+  ];
+  const r = evalHeuristic({ fixtures: fxs });
+  // The drift_detected flag may still fire from hit_rate, but NOT from the
+  // "all high" rule. Verify the specific note is absent.
+  const hasHighNote = r.calibration.notes.some(n => /under-scores severity/.test(n));
+  assert.equal(hasHighNote, false);
 });
 
 test('evalHeuristic: hit_rate computed only over labeled fixtures', () => {

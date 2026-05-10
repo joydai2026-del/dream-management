@@ -46,7 +46,9 @@ async function setupMin(today = '2026-05-09') {
 
 async function runCli(args) {
   try {
-    const r = await exec('node', [BIN, ...args]);
+    const r = await exec('node', [BIN, ...args], {
+      env: { ...process.env, DREAM_ALLOW_AUDIT_BYPASS: '1' },
+    });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
   } catch (e) {
     return { code: e.code, stdout: e.stdout || '', stderr: e.stderr || '' };
@@ -142,6 +144,70 @@ test('resolveFinalVerdict: unknown labels fail-closed', () => {
 });
 
 // ---- usage output ----------------------------------------------------
+
+// ---- Phase D wire-up + final R2 fixes --------------------------------
+
+test('audit-bypass guard: --skip-audit without env var → exit 1', async () => {
+  const dir = await setupMin();
+  // Bypass the auto-injection by calling exec directly without the env.
+  try {
+    await exec('node', [BIN, '--memory-root', dir, '--today', '2026-05-09', '--skip-audit']);
+    assert.fail('expected non-zero exit');
+  } catch (e) {
+    assert.equal(e.code, 1);
+    assert.match(e.stderr, /weaken integrity/);
+  }
+});
+
+test('audit-bypass guard: --skip-audit with DREAM_ALLOW_AUDIT_BYPASS=1 succeeds', async () => {
+  const dir = await setupMin();
+  const r = await exec('node', [BIN, '--memory-root', dir, '--today', '2026-05-09', '--skip-audit', '--skip-dual-gate'], {
+    env: { ...process.env, DREAM_ALLOW_AUDIT_BYPASS: '1' },
+  });
+  assert.match(r.stdout, /\[audit\] SKIPPED/);
+});
+
+test('audit-bypass guard: --dry-run permits --skip-audit without env var', async () => {
+  const dir = await setupMin();
+  const r = await exec('node', [BIN, '--memory-root', dir, '--today', '2026-05-09', '--dry-run', '--skip-audit', '--skip-dual-gate']);
+  // dry-run path returns 0 even without bypass env.
+  assert.match(r.stdout, /\[phase-0\]/);
+});
+
+test('contradiction detector: wired into pipeline (replaces Phase 4 stub)', async () => {
+  const dir = await setupMin();
+  // Seed a pattern-firing-log.md with recurrent violations.
+  await fs.writeFile(path.join(dir, 'pattern-firing-log.md'),
+    '```yaml\nsession: 2026-05-08-1\nfirings:\n  - pattern: caveman\n    outcome: violated\n```\n'
+    + '```yaml\nsession: 2026-05-09-1\nfirings:\n  - pattern: caveman\n    outcome: violated\n```\n',
+  );
+  // Run the pipeline (skip audit so we just verify the contradiction wire-up).
+  const r = await runCli([
+    '--memory-root', dir, '--today', '2026-05-09',
+    '--skip-dual-gate', '--skip-audit',
+  ]);
+  // Phase-4 line shows contradictions=N (not 'stub').
+  assert.match(r.stdout, /\[phase-4\] dates files=\d+ replacements=\d+ contradictions=\d+/);
+  assert.doesNotMatch(r.stdout, /contradictions=stub/);
+});
+
+test('weekly digest: fires on Sunday only', async () => {
+  const dir = await setupMin('2026-05-10'); // 2026-05-10 is a Sunday
+  // Seed a prior event.json so the digest has something to summarize.
+  await fs.mkdir(path.join(dir, 'archive', 'dreams', '2026-05-09'), { recursive: true });
+  await fs.writeFile(
+    path.join(dir, 'archive', 'dreams', '2026-05-09', 'event.json'),
+    JSON.stringify({ schema_version: '1.0.0', verdict: 'PASS', routed: {}, pruned: {}, audit: {} }),
+  );
+  const r = await runCli(['--memory-root', dir, '--today', '2026-05-10']);
+  assert.match(r.stdout, /\[digest\] wrote/);
+});
+
+test('weekly digest: does NOT fire on non-Sunday', async () => {
+  const dir = await setupMin('2026-05-09'); // 2026-05-09 is a Saturday
+  const r = await runCli(['--memory-root', dir, '--today', '2026-05-09']);
+  assert.doesNotMatch(r.stdout, /\[digest\]/);
+});
 
 test('usage text mentions all P5 flags', async () => {
   const r = await runCli(['--help']);

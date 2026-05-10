@@ -55,7 +55,9 @@ async function runCli(args, opts = {}) {
     ...(args.includes('--skip-audit') ? [] : ['--skip-audit']),
   ];
   try {
-    const r = await exec('node', [BIN, ...augmented]);
+    const r = await exec('node', [BIN, ...augmented], {
+      env: { ...process.env, DREAM_ALLOW_AUDIT_BYPASS: '1' },
+    });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
   } catch (e) {
     return { code: e.code, stdout: e.stdout || '', stderr: e.stderr || '' };
@@ -232,8 +234,9 @@ fired yesterday
 
   const r = await runCli(['--memory-root', dir, '--today', today]);
   assert.equal(r.code, 0, `stderr: ${r.stderr}`);
-  // Phase-4 line: 3 files, 3 replacements, contradictions=stub
-  assert.match(r.stdout, /\[phase-4\] dates files=3 replacements=3 contradictions=stub/);
+  // Phase-4 line: 3 files, 3 replacements, contradictions count (no longer stub
+  // after Phase D wire-up — detector returns 0 with no firing-log violations).
+  assert.match(r.stdout, /\[phase-4\] dates files=3 replacements=3 contradictions=\d+/);
   // Staged paths exist
   const stagedRoot = path.join(dir, 'archive', 'dreams', today, 'staged');
   await fs.access(path.join(stagedRoot, 'working-memory.md.tmp'));
