@@ -336,18 +336,24 @@ test('stampDemotion: collapses multiline reason to single line', () => {
 
 // --- R2 fixes ---
 
-test('stampDemotion: stamps demotion_phase: p3-<today> per ADR 008', () => {
+test('stampDemotion: does NOT stamp demotion_phase (ADR 008 reserves it for scoped cleanups)', () => {
+  // Reality-checker R2: applying `demotion_phase: p3-<today>` to nightly
+  // demotions clashes with the frozen historical marker on date 2026-05-09
+  // and is over-extension of ADR 008's structural enforcement. Nightly
+  // demotions satisfy criterion (a) via the firing-log gate; demotion_phase
+  // is reserved for future scoped mass-cleanup tooling.
   const out = _internals.stampDemotion('---\ntitle: T\n---\nbody', '2026-05-10', 'reason');
-  assert.match(out, /demotion_phase: p3-2026-05-10/);
+  assert.match(out, /demoted_at: 2026-05-10/);
+  assert.match(out, /demoted_by: dream-worker/);
+  assert.match(out, /demoted_reason: reason/);
+  assert.equal(out.includes('demotion_phase:'), false);
 });
 
-test('stampDemotion: refuses frozen p3-2026-05-09 historical marker', () => {
-  // Per ADR 008 STRUCTURAL ENFORCEMENT TODO: the dream worker must not
-  // re-write the one-time historical marker.
-  assert.throws(
-    () => _internals.stampDemotion('---\ntitle: T\n---\nbody', '2026-05-09', 'r'),
-    /frozen/,
-  );
+test('stampDemotion: nightly demotion on 2026-05-09 does NOT crash (no frozen-marker conflict)', () => {
+  // Reality-checker R2 BLOCKER fix verification.
+  const out = _internals.stampDemotion('---\ntitle: T\n---\nbody', '2026-05-09', 'reason');
+  assert.match(out, /demoted_at: 2026-05-09/);
+  assert.equal(out.includes('demotion_phase:'), false);
 });
 
 test('runPrune: demotion grace period skips freshly-promoted patterns', async () => {
@@ -379,6 +385,28 @@ body
   // Only old-stale qualifies; fresh-promo gets the grace pass.
   assert.equal(plan.demotions.length, 1);
   assert.equal(plan.demotions[0].name, 'old-stale');
+});
+
+test('runPrune: grace period boundary uses <= so day=grace gets the full window', async () => {
+  // Pattern is exactly 60 days old. With default grace=60, MUST be skipped
+  // (reality-checker R2 finding 3: the boundary semantics — a pattern that
+  // is exactly grace days old gets the protection).
+  const dir = await tmpDir();
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  await fs.writeFile(path.join(adir, 'sixty-day.md'), `---
+title: Sixty Day
+first_seen: 2026-03-11
+---
+body
+`);
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-10', // exactly 60 days from 2026-03-11
+    firingEntries: [],
+    now: new Date('2026-05-10T03:00:00Z'),
+  });
+  assert.equal(plan.demotions.length, 0);
 });
 
 test('runPrune: grace period override via gates lets short windows demote', async () => {
@@ -423,16 +451,48 @@ test('runPrune: journal idempotency — byte-equal archive sets alreadyArchived'
   assert.equal(plan.journal.alreadyArchived, true);
 });
 
-test('runPrune: journal collision (diverging archive) throws to surface to JJ', async () => {
+test('runPrune: journal collision (diverging archive) records sentinel, does NOT throw', async () => {
+  // Reality-checker R2: throwing nuked the whole prune plan. Now the
+  // collision is a sentinel; corrections + session-index + demotions still
+  // run, and the journal step's stage no-ops with archiveCollision flagged
+  // for the dream-log.
   const dir = await tmpDir();
   await writeFile(path.join(dir, 'learning-journals', '2026-05-10.md'), 'today version\n');
   await writeFile(
     path.join(dir, 'archive', 'journals', '2026-05', '2026-05-10.md'),
     'archive version that differs\n',
   );
-  await assert.rejects(
-    () => runPrune({ memoryRoot: dir, today: '2026-05-10' }),
-    /archive collision/,
+  // Add some corrections so we can verify the OTHER tiers still plan.
+  await writeFile(path.join(dir, 'corrections.md'), correctionsFixture());
+  const { plan, summary } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-10',
+    now: new Date('2026-05-10T03:00:00Z'),
+  });
+  assert.equal(plan.journal.archiveCollision, true);
+  assert.equal(summary.journalArchiveCollision, true);
+  assert.equal(summary.journalArchived, 0);
+  // Corrections plan still built
+  assert.equal(plan.corrections.found, true);
+  assert.equal(plan.corrections.archive.length > 0, true);
+});
+
+test('stagePrunePlan: journal collision skips both copy and tombstone', async () => {
+  const dir = await tmpDir();
+  await writeFile(path.join(dir, 'learning-journals', '2026-05-10.md'), 'today\n');
+  await writeFile(
+    path.join(dir, 'archive', 'journals', '2026-05', '2026-05-10.md'),
+    'differs\n',
+  );
+  const { plan } = await runPrune({ memoryRoot: dir, today: '2026-05-10' });
+  const dreamDir = path.join(dir, 'archive', 'dreams', '2026-05-10');
+  const { stagedFiles } = await stagePrunePlan({
+    plan, dreamDir, memoryRoot: dir, today: '2026-05-10',
+  });
+  // No journal-related staged files at all
+  assert.equal(
+    stagedFiles.some(p => p.includes('learning-journals') || p.includes('archive/journals/2026-05')),
+    false,
   );
 });
 
@@ -533,4 +593,56 @@ test('patternFirstSeen: returns null on missing or non-ISO field', () => {
   assert.equal(_internals.patternFirstSeen({ frontmatter: {} }), null);
   assert.equal(_internals.patternFirstSeen({ frontmatter: { first_seen: 'yesterday' } }), null);
   assert.equal(_internals.patternFirstSeen({}), null);
+});
+
+test('setFrontmatterField: replaces multi-word existing value atomically (Codex R2 bug)', () => {
+  // Prior `(\\S*)(.*)$` capture preserved the tail "old text here", so
+  // replacing "old text here" with "new" produced "new text here".
+  const original = `---
+title: T
+demoted_reason: old text here
+---
+body
+`;
+  const out = _internals.setFrontmatterField(original, 'demoted_reason', 'new reason');
+  assert.match(out, /demoted_reason: new reason/);
+  assert.equal(out.includes('text here'), false);
+});
+
+test('setFrontmatterField: preserves inline comment on multi-word value swap', () => {
+  const original = `---
+title: T
+sightings: 11   # bumped manually
+---
+body
+`;
+  const out = _internals.setFrontmatterField(original, 'sightings', '12');
+  assert.match(out, /sightings: 12   # bumped manually/);
+});
+
+test('stagePrunePlan: sidecar is staged BEFORE archive .tmp (Codex R2 ordering)', async () => {
+  // The sweep step relies on the sidecar being present whenever an archive
+  // .tmp is present. Order: sidecar first; .tmp last. A crash in between
+  // leaves a harmless orphan sidecar, never a guard-less .tmp.
+  const dir = await tmpDir();
+  await writeFile(path.join(dir, 'corrections.md'), correctionsFixture());
+  await writeFile(path.join(dir, 'archive', 'corrections', '2026-04.md'), 'prior\n');
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-10',
+    now: new Date('2026-05-10T03:00:00Z'),
+  });
+  const dreamDir = path.join(dir, 'archive', 'dreams', '2026-05-10');
+  const { stagedFiles } = await stagePrunePlan({
+    plan, dreamDir, memoryRoot: dir, today: '2026-05-10',
+  });
+  // For a single archive month, the staged-files order should be:
+  //   trimmed corrections.md.tmp,
+  //   archive/corrections/2026-04.md.tmp.preimage-sha256,
+  //   archive/corrections/2026-04.md.tmp
+  const sidecarIdx = stagedFiles.findIndex(p => p.endsWith('preimage-sha256'));
+  const tmpIdx = stagedFiles.findIndex(p => p.endsWith('archive/corrections/2026-04.md.tmp'));
+  assert.ok(sidecarIdx >= 0, 'expected sidecar present');
+  assert.ok(tmpIdx >= 0, 'expected archive .tmp present');
+  assert.ok(sidecarIdx < tmpIdx, `sidecar (idx ${sidecarIdx}) must precede archive .tmp (idx ${tmpIdx})`);
 });

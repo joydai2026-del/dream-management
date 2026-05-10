@@ -114,6 +114,107 @@ test('CLI: live run creates tag, snapshot, manifest; releases lock', async () =>
   // Phase-1 reported (1 journal entry; 1 session log scanned with markers)
   assert.match(r.stdout, /\[phase-1\] journal=1 sessions=1/);
   assert.match(r.stdout, /"correction":1/);
+  // Phase-2 reports zero promotions (no candidates extracted in starter)
+  assert.match(r.stdout, /\[phase-2\] insights=\d+/);
+  // Phase-3 reports counts and stages output
+  assert.match(r.stdout, /\[phase-3\] corrections=\d+ sessions=\d+ journal=\d+ demoted=\d+/);
+});
+
+test('CLI E2E: phase-3 stages all four sub-steps when fixtures are populated', async () => {
+  // Test-automator R2 GAP-C1: e2e through bin/dream.js exercising every
+  // phase-3 path (corrections trim + session-index tier + journal archival
+  // + pattern demotion). Verifies the wiring in bin/dream.js, not the
+  // library directly.
+  const today = '2026-05-10';
+  const dir = await tmpDir();
+  await gitInit(dir);
+
+  // Fixture: corrections with one aged-RESOLVED entry → archives to 2026-04
+  await fs.writeFile(path.join(dir, 'corrections.md'), [
+    '# Corrections', '', '## Recent', '',
+    '### 2026-04-01 RESOLVED — fixed bug',
+    '', '**Status**: RESOLVED 2026-04-01', '', 'Body.', '',
+  ].join('\n'));
+
+  // Fixture: 12 dated session-index entries → archives the oldest 2
+  const sessLines = ['# Session Index', '', '## Recent', ''];
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(2026, 3, 1 + i).toISOString().slice(0, 10);
+    sessLines.push(`### ${d} session ${i}`, '', `Body for ${d}.`, '');
+  }
+  await fs.writeFile(path.join(dir, 'session-index.md'), sessLines.join('\n'));
+
+  // Fixture: today's journal
+  await fs.mkdir(path.join(dir, 'learning-journals'));
+  await fs.writeFile(
+    path.join(dir, 'learning-journals', `${today}.md`),
+    '## Entries\n- [09:00] [mistake] x\n',
+  );
+
+  // Fixture: a stale active pattern (first_seen far enough back to clear the
+  // 60-day grace window AND zero firings → qualifies for demotion)
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  await fs.writeFile(path.join(adir, 'old-stale.md'), `---
+title: Old Stale
+first_seen: 2025-01-01
+---
+body
+`);
+
+  // Required for memory-loader compat; phase-0 reads it
+  await fs.writeFile(path.join(dir, 'working-memory.md'), 'wm\n');
+
+  const r = await runCli(['--memory-root', dir, '--today', today]);
+  assert.equal(r.code, 0, `stderr: ${r.stderr}`);
+
+  // Phase-3 line shows the four counts
+  assert.match(r.stdout, /\[phase-3\] corrections=1 sessions=2 journal=1 demoted=1/);
+  // staged=N line emitted (count > 0 since we have fixtures)
+  assert.match(r.stdout, /\[phase-3\] staged=\d+/);
+
+  const stagedRoot = path.join(dir, 'archive', 'dreams', today, 'staged');
+  // 1) Corrections: trimmed source + archive append + preimage sidecar
+  await fs.access(path.join(stagedRoot, 'corrections.md.tmp'));
+  await fs.access(path.join(stagedRoot, 'archive', 'corrections', '2026-04.md.tmp'));
+  await fs.access(path.join(stagedRoot, 'archive', 'corrections', '2026-04.md.tmp.preimage-sha256'));
+  // 2) Session index: trimmed + archive
+  await fs.access(path.join(stagedRoot, 'session-index.md.tmp'));
+  await fs.access(path.join(stagedRoot, 'archive', 'sessions', 'session-index-2026-04.md.tmp'));
+  // 3) Journal: archive copy + tombstone
+  await fs.access(path.join(stagedRoot, 'archive', 'journals', '2026-05', `${today}.md.tmp`));
+  await fs.access(path.join(stagedRoot, 'learning-journals', `${today}.md.tombstone`));
+  // 4) Demotion: stamped reference + tombstone for active twin
+  const demotedRef = path.join(stagedRoot, 'patterns', 'reference', 'old-stale.md.tmp');
+  const demotedContent = await fs.readFile(demotedRef, 'utf8');
+  assert.match(demotedContent, /demoted_at: 2026-05-10/);
+  assert.match(demotedContent, /demoted_by: dream-worker/);
+  assert.equal(demotedContent.includes('demotion_phase:'), false);
+  await fs.access(path.join(stagedRoot, 'patterns', 'active', 'old-stale.md.tombstone'));
+
+  // Live tree unaffected: original active still there, no live archive write
+  await fs.access(path.join(adir, 'old-stale.md'));
+  await assert.rejects(() => fs.access(path.join(dir, 'archive', 'corrections', '2026-04.md')));
+});
+
+test('CLI E2E: dry-run skips phase-3 staging but reports the plan', async () => {
+  const today = '2026-05-10';
+  const dir = await tmpDir();
+  await gitInit(dir);
+  await fs.writeFile(path.join(dir, 'corrections.md'), [
+    '### 2026-04-01 RESOLVED', '', '**Status**: RESOLVED', '', 'b', '',
+  ].join('\n'));
+  await fs.writeFile(path.join(dir, 'working-memory.md'), 'wm\n');
+
+  const r = await runCli(['--memory-root', dir, '--today', today, '--dry-run']);
+  assert.equal(r.code, 0, `stderr: ${r.stderr}`);
+  // Phase-3 reports the would-be plan
+  assert.match(r.stdout, /\[phase-3\] corrections=1/);
+  // Dry-run skip line emitted (plan summary still computed, no staging)
+  assert.match(r.stdout, /\[phase-3\] DRY-RUN skip stage/);
+  // No staged tree created
+  await assert.rejects(() =>
+    fs.access(path.join(dir, 'archive', 'dreams', today, 'staged')));
 });
 
 test('CLI: exit code 2 when lock held by another live process', async () => {
