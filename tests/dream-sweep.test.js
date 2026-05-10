@@ -719,22 +719,34 @@ test('finalizeAuditVerdicts: sweep=null branch (Stage A FAIL early-abort)', asyn
   assert.match(dle, /\*\*Sweep\*\*: not run/);
 });
 
-test('classifyStaged: deeply nested archive paths preserve full logicalRel', async () => {
+test('classifyStaged: deeply nested paths preserve full logicalRel', async () => {
+  // Archive paths that don't match SIDECAR_REQUIRED_PATTERNS (corrections
+  // month-files + session-index month-files) are first-write moves
+  // (journals, raw session-log archives) and classify as sources, not
+  // archives. The XPT-quality test asserts that deeply-nested
+  // logicalRels are preserved verbatim regardless of category.
   const dir = await tmpDir();
   const { dreamDir } = await scaffoldDreamDir(dir);
   const stagedDir = path.join(dreamDir, 'staged');
+  // Use a journals path: deep nesting + first-write semantics → sources[].
   await writeFile(
-    path.join(stagedDir, 'archive', 'agents', 'claude-code-m4', 'patterns', '2026', 'foo.md.tmp'),
+    path.join(stagedDir, 'archive', 'journals', '2026-05', '2026-05-09.md.tmp'),
     'x\n',
   );
+  // And a corrections-archive path: SIDECAR_REQUIRED_PATTERNS match → archives[].
   await writeFile(
-    path.join(stagedDir, 'archive', 'agents', 'claude-code-m4', 'patterns', '2026', 'foo.md.tmp.preimage-sha256'),
+    path.join(stagedDir, 'archive', 'corrections', '2026-04.md.tmp'),
+    'y\n',
+  );
+  await writeFile(
+    path.join(stagedDir, 'archive', 'corrections', '2026-04.md.tmp.preimage-sha256'),
     JSON.stringify({ sha256: null }) + '\n',
   );
   const cls = await classifyStaged(stagedDir);
   assert.equal(cls.archives.length, 1);
-  assert.equal(cls.archives[0].logicalRel,
-    'archive/agents/claude-code-m4/patterns/2026/foo.md');
+  assert.equal(cls.archives[0].logicalRel, 'archive/corrections/2026-04.md');
+  assert.equal(cls.sources.length, 1);
+  assert.equal(cls.sources[0].logicalRel, 'archive/journals/2026-05/2026-05-09.md');
 });
 
 test('verifyAllSidecars: malformed sidecar JSON → conflict', async () => {
