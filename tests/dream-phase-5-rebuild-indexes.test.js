@@ -172,7 +172,7 @@ test('renderDreamLogEntry: surfaces journal collision when present', () => {
   assert.match(out, /COLLISION/);
 });
 
-test('buildEventJson: produces well-formed JSON with required schema fields', () => {
+test('buildEventJson: produces well-formed JSON conforming to archive-schema § 2.5', () => {
   const obj = buildEventJson({
     today: '2026-05-10', verdict: 'PASS-TENTATIVE',
     consumerName: 'test-consumer',
@@ -181,16 +181,42 @@ test('buildEventJson: produces well-formed JSON with required schema fields', ()
     routePlan: EMPTY_PLANS.routePlan, prunePlan: EMPTY_PLANS.prunePlan,
     datesPlan: EMPTY_PLANS.datesPlan,
   });
+  // Per archive-schema § 2.5: required top-level fields
   assert.equal(obj.schema_version, '1.0.0');
   assert.equal(obj.consumer_name, 'test-consumer');
   assert.equal(obj.git_tag, 'dream/pre/2026-05-10');
   assert.equal(obj.verdict, 'PASS-TENTATIVE');
+  assert.ok(obj.run_id);
   assert.ok(obj.source_signal);
+  assert.ok(Array.isArray(obj.insights));
   assert.ok(obj.routed);
   assert.ok(obj.pruned);
-  assert.ok(obj.dates);
-  assert.ok(obj.contradictions);
-  assert.equal(obj.contradictions.stub, true);
+  assert.ok(Array.isArray(obj.contradictions_surfaced));
+  assert.ok(obj.audit);
+  assert.ok(obj.token_cost);
+  assert.equal(typeof obj.duration_seconds, 'number');
+
+  // Spec-named source_signal subkeys
+  assert.equal(typeof obj.source_signal.sessions_in_24h, 'number');
+  assert.equal(typeof obj.source_signal.journal_entries_consumed, 'number');
+  assert.equal(typeof obj.source_signal.corrections_received, 'number');
+  assert.equal(typeof obj.source_signal.quarantined_entries, 'number');
+
+  // Spec-named pruned subkeys
+  assert.equal(typeof obj.pruned.corrections_lines_archived, 'number');
+  assert.equal(typeof obj.pruned.session_index_lines_before, 'number');
+  assert.equal(typeof obj.pruned.session_index_lines_after, 'number');
+  assert.equal(typeof obj.pruned.journals_archived_count, 'number');
+  assert.equal(typeof obj.pruned.next_session_prompts_rotated, 'number');
+
+  // Spec-named routed subkeys
+  assert.equal(typeof obj.routed.corrections_appended, 'number');
+  assert.ok(Array.isArray(obj.routed.decisions_logged));
+
+  // contradictions surface array + stub flag both present
+  assert.equal(obj.contradictions_stub, true);
+
+  // audit shape
   assert.deepEqual(obj.audit.stage_a, { verdict: 'pending', findings: [] });
 });
 
@@ -199,8 +225,8 @@ test('buildEventJson: includes routePlan reinforcements + promotions', () => {
     today: '2026-05-10', verdict: 'PASS-TENTATIVE',
     ...EMPTY_SUMMARIES,
     routePlan: {
-      reinforce: [{ pattern: 'foo', sightingsAfter: 12 }],
-      promote: [{ slug: 'new-thing', importance: 9, journalMentions: 4 }],
+      reinforce: [{ pattern: 'foo', sightingsAfter: 12, evidence: [] }],
+      promote: [{ slug: 'new-thing', importance: 9, journalMentions: 4, evidence: [] }],
       declined: [{ slug: 'too-soft', reason: 'weighted_evidence=2.0' }],
       removeReference: [{ slug: 'fresh-promo' }],
     },
@@ -211,6 +237,55 @@ test('buildEventJson: includes routePlan reinforcements + promotions', () => {
   assert.equal(obj.routed.patterns_promoted[0].slug, 'new-thing');
   assert.equal(obj.routed.patterns_promotion_declined[0].reason, 'weighted_evidence=2.0');
   assert.equal(obj.routed.reference_removals[0].slug, 'fresh-promo');
+  // insights[] gets auto-derived from reinforce + promote
+  assert.equal(obj.insights.length, 2);
+  assert.match(obj.insights[0].id, /^insight-2026-05-10-reinforce-/);
+  assert.match(obj.insights[0].routed_to, /patterns\/active\/foo\.md/);
+  assert.match(obj.insights[1].id, /^insight-2026-05-10-promote-/);
+});
+
+test('buildEventJson: insights[] override is honored when caller passes explicit list', () => {
+  const obj = buildEventJson({
+    today: '2026-05-10', verdict: 'PASS-TENTATIVE',
+    ...EMPTY_SUMMARIES,
+    routePlan: EMPTY_PLANS.routePlan, prunePlan: EMPTY_PLANS.prunePlan,
+    datesPlan: EMPTY_PLANS.datesPlan,
+    insights: [
+      { id: 'custom-1', importance: 8, summary: 'curated', source_citations: [], routed_to: null },
+    ],
+  });
+  assert.equal(obj.insights.length, 1);
+  assert.equal(obj.insights[0].id, 'custom-1');
+});
+
+test('buildEventJson: durationSeconds + tokenCost overrides flow through', () => {
+  const obj = buildEventJson({
+    today: '2026-05-10', verdict: 'PASS-TENTATIVE',
+    ...EMPTY_SUMMARIES,
+    routePlan: EMPTY_PLANS.routePlan, prunePlan: EMPTY_PLANS.prunePlan,
+    datesPlan: EMPTY_PLANS.datesPlan,
+    durationSeconds: 142,
+    tokenCost: { worker_input_tokens: 18420, worker_output_tokens: 3210, auditor_input_tokens: 0, auditor_output_tokens: 0, usd_estimate: 0.42 },
+  });
+  assert.equal(obj.duration_seconds, 142);
+  assert.equal(obj.token_cost.worker_input_tokens, 18420);
+  assert.equal(obj.token_cost.usd_estimate, 0.42);
+});
+
+test('buildPreAction: source citation matches SUCCESS-CRITERIA P5 #6 grep `\\(source: .+\\.md\\)`', async () => {
+  const dir = await tmpDir();
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  await fs.writeFile(path.join(adir, 'foo.md'), `---
+title: Foo
+importance: 8
+---
+body
+`);
+  const out = await buildPreAction({ memoryRoot: dir, today: '2026-05-10' });
+  // The verification grep used in SUCCESS-CRITERIA.md
+  const re = /\(source: .+\.md\)/;
+  assert.ok(re.test(out), `expected /(source: ....md)/ in:\n${out}`);
 });
 
 test('runRebuildIndexes: emits all five artifacts with non-empty content', async () => {
