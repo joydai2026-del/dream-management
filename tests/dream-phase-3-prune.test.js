@@ -161,8 +161,8 @@ test('stagePrunePlan: corrections — stages trimmed source + per-month archive 
   const { stagedFiles } = await stagePrunePlan({
     plan, dreamDir, memoryRoot: dir, today: '2026-05-10',
   });
-  // 1 trimmed source + 1 monthly archive
-  assert.equal(stagedFiles.length, 2);
+  // 1 trimmed source + 1 monthly archive + 1 preimage sidecar (R2)
+  assert.equal(stagedFiles.length, 3);
   const trimmed = stagedFiles.find(p => p.endsWith('staged/corrections.md.tmp'));
   assert.ok(trimmed);
   const trimmedContent = await fs.readFile(trimmed, 'utf8');
@@ -332,4 +332,205 @@ test('stampDemotion: collapses multiline reason to single line', () => {
   );
   assert.match(out, /demoted_reason: no firings in 60 days firing-log-read/);
   assert.equal(out.includes('demoted_reason: no firings\n'), false);
+});
+
+// --- R2 fixes ---
+
+test('stampDemotion: stamps demotion_phase: p3-<today> per ADR 008', () => {
+  const out = _internals.stampDemotion('---\ntitle: T\n---\nbody', '2026-05-10', 'reason');
+  assert.match(out, /demotion_phase: p3-2026-05-10/);
+});
+
+test('stampDemotion: refuses frozen p3-2026-05-09 historical marker', () => {
+  // Per ADR 008 STRUCTURAL ENFORCEMENT TODO: the dream worker must not
+  // re-write the one-time historical marker.
+  assert.throws(
+    () => _internals.stampDemotion('---\ntitle: T\n---\nbody', '2026-05-09', 'r'),
+    /frozen/,
+  );
+});
+
+test('runPrune: demotion grace period skips freshly-promoted patterns', async () => {
+  const dir = await tmpDir();
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  // first_seen = today - 5 days. With default 60-day grace, must NOT demote
+  // even though firingEntries is empty.
+  await fs.writeFile(path.join(adir, 'fresh-promo.md'), `---
+title: Fresh
+first_seen: 2026-05-05
+sightings: 1
+---
+body
+`);
+  await fs.writeFile(path.join(adir, 'old-stale.md'), `---
+title: Old Stale
+first_seen: 2025-01-01
+sightings: 1
+---
+body
+`);
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-10',
+    firingEntries: [],
+    now: new Date('2026-05-10T03:00:00Z'),
+  });
+  // Only old-stale qualifies; fresh-promo gets the grace pass.
+  assert.equal(plan.demotions.length, 1);
+  assert.equal(plan.demotions[0].name, 'old-stale');
+});
+
+test('runPrune: grace period override via gates lets short windows demote', async () => {
+  const dir = await tmpDir();
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  await fs.writeFile(path.join(adir, 'recent.md'), `---
+title: Recent
+first_seen: 2026-05-05
+sightings: 1
+---
+body
+`);
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-10',
+    firingEntries: [],
+    gates: { demotionGracePeriodDays: 1 }, // 1-day grace, recent is 5d → demote
+    now: new Date('2026-05-10T03:00:00Z'),
+  });
+  assert.equal(plan.demotions.length, 1);
+});
+
+test('runPrune: enforces ISO date format on `today`', async () => {
+  await assert.rejects(
+    () => runPrune({ memoryRoot: '/tmp', today: 'yesterday' }),
+    /YYYY-MM-DD/,
+  );
+});
+
+test('runPrune: journal idempotency — byte-equal archive sets alreadyArchived', async () => {
+  const dir = await tmpDir();
+  const journalContent = '# Journal\n\n- [09:00] [mistake] x\n';
+  await writeFile(path.join(dir, 'learning-journals', '2026-05-10.md'), journalContent);
+  // Pre-existing archive with EXACTLY the same content (idempotent re-run)
+  await writeFile(
+    path.join(dir, 'archive', 'journals', '2026-05', '2026-05-10.md'),
+    journalContent,
+  );
+  const { plan } = await runPrune({ memoryRoot: dir, today: '2026-05-10' });
+  assert.equal(plan.journal.found, true);
+  assert.equal(plan.journal.alreadyArchived, true);
+});
+
+test('runPrune: journal collision (diverging archive) throws to surface to JJ', async () => {
+  const dir = await tmpDir();
+  await writeFile(path.join(dir, 'learning-journals', '2026-05-10.md'), 'today version\n');
+  await writeFile(
+    path.join(dir, 'archive', 'journals', '2026-05', '2026-05-10.md'),
+    'archive version that differs\n',
+  );
+  await assert.rejects(
+    () => runPrune({ memoryRoot: dir, today: '2026-05-10' }),
+    /archive collision/,
+  );
+});
+
+test('stagePrunePlan: idempotent journal — alreadyArchived skips copy, still tombstones source', async () => {
+  const dir = await tmpDir();
+  const journalContent = '# Journal\n';
+  await writeFile(path.join(dir, 'learning-journals', '2026-05-10.md'), journalContent);
+  await writeFile(
+    path.join(dir, 'archive', 'journals', '2026-05', '2026-05-10.md'),
+    journalContent,
+  );
+  const { plan } = await runPrune({ memoryRoot: dir, today: '2026-05-10' });
+  const dreamDir = path.join(dir, 'archive', 'dreams', '2026-05-10');
+  const { stagedFiles } = await stagePrunePlan({
+    plan, dreamDir, memoryRoot: dir, today: '2026-05-10',
+  });
+  // No copy of journal; only tombstone for source.
+  const copies = stagedFiles.filter(p => p.endsWith('archive/journals/2026-05/2026-05-10.md.tmp'));
+  assert.equal(copies.length, 0);
+  const tomb = stagedFiles.find(p => p.endsWith('learning-journals/2026-05-10.md.tombstone'));
+  assert.ok(tomb);
+  const tombJson = JSON.parse(await fs.readFile(tomb, 'utf8'));
+  assert.match(tombJson.reason, /already archived/);
+});
+
+test('stagePrunePlan: archive append writes preimage-sha256 sidecar with live archive hash', async () => {
+  const dir = await tmpDir();
+  await writeFile(path.join(dir, 'corrections.md'), correctionsFixture());
+  // Live archive already has prior content (sha will be recorded)
+  const priorArchive = '### 2026-04-pre EXISTING\n\nprior body\n';
+  await writeFile(path.join(dir, 'archive', 'corrections', '2026-04.md'), priorArchive);
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-10',
+    now: new Date('2026-05-10T03:00:00Z'),
+  });
+  const dreamDir = path.join(dir, 'archive', 'dreams', '2026-05-10');
+  const { stagedFiles } = await stagePrunePlan({
+    plan, dreamDir, memoryRoot: dir, today: '2026-05-10',
+  });
+  const sidecar = stagedFiles.find(p => p.endsWith('archive/corrections/2026-04.md.tmp.preimage-sha256'));
+  assert.ok(sidecar, 'expected preimage sidecar');
+  const json = JSON.parse(await fs.readFile(sidecar, 'utf8'));
+  assert.equal(json.schema_version, '1.0.0');
+  assert.equal(json.sha256, _internals.sha256(priorArchive));
+});
+
+test('stagePrunePlan: archive append sidecar records null sha when no live archive yet', async () => {
+  const dir = await tmpDir();
+  await writeFile(path.join(dir, 'corrections.md'), correctionsFixture());
+  // No live archive file
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-10',
+    now: new Date('2026-05-10T03:00:00Z'),
+  });
+  const dreamDir = path.join(dir, 'archive', 'dreams', '2026-05-10');
+  const { stagedFiles } = await stagePrunePlan({
+    plan, dreamDir, memoryRoot: dir, today: '2026-05-10',
+  });
+  const sidecar = stagedFiles.find(p => p.endsWith('preimage-sha256'));
+  const json = JSON.parse(await fs.readFile(sidecar, 'utf8'));
+  assert.equal(json.sha256, null);
+  assert.match(json.note, /did not exist/);
+});
+
+test('stagePrunePlan: tombstones include target_missing field for sweep symmetry', async () => {
+  const dir = await tmpDir();
+  await writeFile(path.join(dir, 'learning-journals', '2026-05-10.md'), '# Journal\n');
+  const { plan } = await runPrune({ memoryRoot: dir, today: '2026-05-10' });
+  const dreamDir = path.join(dir, 'archive', 'dreams', '2026-05-10');
+  const { stagedFiles } = await stagePrunePlan({
+    plan, dreamDir, memoryRoot: dir, today: '2026-05-10',
+  });
+  const tomb = stagedFiles.find(p => p.endsWith('.tombstone'));
+  const json = JSON.parse(await fs.readFile(tomb, 'utf8'));
+  assert.equal(typeof json.target_missing, 'boolean');
+  assert.equal(json.target_missing, false); // source exists
+});
+
+test('tombstone() emits POSIX paths even on backslash inputs', () => {
+  const out = JSON.parse(_internals.tombstone(
+    'patterns\\active\\foo.md',
+    'r',
+    '2026-05-10',
+    'patterns\\reference\\foo.md',
+  ));
+  assert.equal(out.removed_path, 'patterns/active/foo.md');
+  assert.equal(out.consolidation_target, 'patterns/reference/foo.md');
+});
+
+test('patternFirstSeen: returns frontmatter ISO date when present', () => {
+  const desc = { frontmatter: { first_seen: '2026-04-01' } };
+  assert.equal(_internals.patternFirstSeen(desc), '2026-04-01');
+});
+
+test('patternFirstSeen: returns null on missing or non-ISO field', () => {
+  assert.equal(_internals.patternFirstSeen({ frontmatter: {} }), null);
+  assert.equal(_internals.patternFirstSeen({ frontmatter: { first_seen: 'yesterday' } }), null);
+  assert.equal(_internals.patternFirstSeen({}), null);
 });
