@@ -166,6 +166,7 @@ async function runCli(dir, today, extraArgs = []) {
         DREAM_NO_NOTIFY: '1',
         TELEGRAM_BOT_TOKEN: '',
         TELEGRAM_CHAT_ID: '',
+        TELEGRAM_THREAD_ID: '',
       },
     });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
@@ -398,6 +399,7 @@ test('XPT-5: actual SIGKILL mid-run + same-date retry is idempotent', async () =
       DREAM_NO_NOTIFY: '1',
       TELEGRAM_BOT_TOKEN: '',
       TELEGRAM_CHAT_ID: '',
+      TELEGRAM_THREAD_ID: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

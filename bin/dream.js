@@ -160,7 +160,8 @@ P5 worker — full pipeline: dual-gate → phase-0..5 stage → Stage A → Stag
 
 Notification env vars (read by the worker):
   TELEGRAM_BOT_TOKEN      Bot token from @BotFather (Telegram channel)
-  TELEGRAM_CHAT_ID        Chat or group ID to message
+  TELEGRAM_CHAT_ID        Chat or group ID to message (e.g. -1003411410603)
+  TELEGRAM_THREAD_ID      Optional topic/forum-thread ID for supergroups
   DREAM_NO_NOTIFY=1       Same as --no-notify (umbrella suppress)
   DREAM_NO_TELEGRAM=1     Same as --no-telegram
 
@@ -226,23 +227,28 @@ function notifyMacOS({ title, message, suppress }) {
  * Failure (network down, bad token, rate-limited, --no-telegram) NEVER
  * fails the worker. Suppressed by --no-notify (umbrella) or --no-telegram.
  */
-async function notifyTelegram({ token, chatId, title, message, suppress }) {
+async function notifyTelegram({ token, chatId, threadId, title, message, suppress }) {
   if (suppress) return;
   if (!token || !chatId) return; // not configured — silent skip
   try {
     const text = `*${title}*\n\`\`\`\n${String(message).slice(0, 3500)}\n\`\`\``;
+    const body = {
+      chat_id: chatId,
+      text,
+      parse_mode: 'Markdown',
+      disable_notification: false,
+    };
+    // Topic / forum-thread support: posts INTO a topic of a supergroup.
+    // Required when the chat is a forum-enabled supergroup. Telegram
+    // ignores the field for non-forum chats.
+    if (threadId) body.message_thread_id = Number(threadId);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
       await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text,
-          parse_mode: 'Markdown',
-          disable_notification: false,
-        }),
+        body: JSON.stringify(body),
         signal: ctrl.signal,
       });
     } finally {
@@ -262,6 +268,7 @@ async function notifyAll({ title, message, suppress, suppressTelegram }) {
   await notifyTelegram({
     token: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID,
+    threadId: process.env.TELEGRAM_THREAD_ID,
     title,
     message,
     suppress: suppress || suppressTelegram,

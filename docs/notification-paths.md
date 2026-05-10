@@ -96,6 +96,8 @@ display in Telegram clients. Markdown title is bolded.)
 
 ### One-time setup
 
+**A. Direct chat or non-forum group** (simple):
+
 1. Open Telegram, message `@BotFather`, send `/newbot`.
 2. Pick a name + username for your bot. BotFather returns a token like
    `123456789:ABCdefGHIjklmnopqrSTUvwxyz0123456789`.
@@ -115,6 +117,31 @@ display in Telegram clients. Markdown title is bolded.)
    launchctl bootout gui/$(id -u)/com.jj.dream
    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jj.dream.plist
    ```
+
+**B. Supergroup with topics/forum threads** (e.g., reusing Hermes' bot to
+post into a dedicated dream-mgmt topic):
+
+Telegram link `https://t.me/c/<INTERNAL_ID>/<THREAD_ID>/<MSG_ID>` decodes:
+- `chat_id` = `-100` + `<INTERNAL_ID>` (e.g. `t.me/c/3411410603/...` →
+  `chat_id = -1003411410603`)
+- `message_thread_id` = `<THREAD_ID>` (the topic; ignore the trailing `<MSG_ID>`)
+
+1-3. Same as above (or reuse an existing bot).
+4. Add the bot to the supergroup with permission to post in the topic.
+5. Configure all three env vars in the plist:
+   ```xml
+   <key>TELEGRAM_BOT_TOKEN</key>
+   <string>123456789:ABCdef...</string>
+   <key>TELEGRAM_CHAT_ID</key>
+   <string>-1003411410603</string>
+   <key>TELEGRAM_THREAD_ID</key>
+   <string>4</string>
+   ```
+6. Reload as in step 7 above.
+
+The worker passes `message_thread_id` only when `TELEGRAM_THREAD_ID` is
+set — Telegram silently ignores it for non-forum chats, so leaving it
+unset for direct chats is safe.
 
 ### Reusing an existing bot vs dedicated bot
 

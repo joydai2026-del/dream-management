@@ -62,6 +62,7 @@ async function runCli(args, opts = {}) {
         DREAM_NO_NOTIFY: '1', // suppress macOS + Telegram during tests
         TELEGRAM_BOT_TOKEN: '',
         TELEGRAM_CHAT_ID: '',
+        TELEGRAM_THREAD_ID: '',
       },
     });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
