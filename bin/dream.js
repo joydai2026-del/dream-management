@@ -292,13 +292,39 @@ export async function main(argv = process.argv.slice(2)) {
 
     // Phase 4 — CONTRADICTIONS + DATES. Sweep relative-date phrases in
     // hot-tier files to ISO YYYY-MM-DD. Contradiction detection is a stub
-    // for now (real detection is wired alongside the P5 dream-log writer).
+    // (P5 wires the real detector alongside the dream-log writer).
+    //
+    // Two collision guards (reviewer R1 BLOCKERS):
+    //   - excludePaths: files Phase-3 is tombstoning (demoted patterns).
+    //   - preStaged:    Phase-3 trimmed corrections / session-index content,
+    //     so Phase-4 rewrites on top of the trim rather than overwriting
+    //     it from the pre-trim live file.
     await lock.update('phase-4-dates-contradictions');
-    const datesResult = await runDatesContradictions({ memoryRoot, today });
+    const phase3DemotionPaths = (pruneResult.plan.demotions || [])
+      .map(d => d.sourceRel);
+    const preStaged = new Map();
+    const corr = pruneResult.plan.corrections;
+    if (corr?.found && corr.archive.length > 0) {
+      const { serializeBlocks } = await import('../lib/parse-md-blocks.js');
+      preStaged.set('corrections.md', serializeBlocks(corr.keptBlocks));
+    }
+    const sess = pruneResult.plan.sessionIndex;
+    if (sess?.found && sess.archive.length > 0) {
+      const { serializeBlocks } = await import('../lib/parse-md-blocks.js');
+      preStaged.set('session-index.md', serializeBlocks(sess.keptBlocks));
+    }
+    const datesResult = await runDatesContradictions({
+      memoryRoot,
+      today,
+      excludePaths: phase3DemotionPaths,
+      preStaged,
+    });
+    const contradictionsLabel = datesResult.summary.contradictionsStub
+      ? 'stub' : String(datesResult.summary.contradictionCount);
     process.stdout.write(
       `[phase-4] dates files=${datesResult.summary.filesWithReplacements} `
       + `replacements=${datesResult.summary.totalReplacements} `
-      + `contradictions=${datesResult.summary.contradictionCount}\n`,
+      + `contradictions=${contradictionsLabel}\n`,
     );
     if (dryRun) {
       process.stdout.write(`[phase-4] DRY-RUN skip stage\n`);

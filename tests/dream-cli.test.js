@@ -197,6 +197,42 @@ body
   await assert.rejects(() => fs.access(path.join(dir, 'archive', 'corrections', '2026-04.md')));
 });
 
+test('CLI E2E: phase-4 stages relative-date rewrites + reports stub for contradictions', async () => {
+  // Test-automator + reviewer R1: end-to-end through bin/dream.js exercising
+  // phase-4 wiring. Verifies preStaged collision guard (Phase-3 trim feeds
+  // into Phase-4 rewrite, not live pre-trim) + label "contradictions=stub".
+  const today = '2026-05-10';
+  const dir = await tmpDir();
+  await gitInit(dir);
+  // working-memory has a relative date — rewrites
+  await fs.writeFile(path.join(dir, 'working-memory.md'), 'updated today\n');
+  // session-index with some content but no Phase-3 archive (so preStaged miss)
+  await fs.writeFile(path.join(dir, 'session-index.md'), 'tomorrow we ship\n');
+  // pattern with relative date — rewrites. `first_seen: today` keeps it
+  // inside Phase-3's grace window so the date sweep can run on it (Phase-3
+  // would otherwise demote and exclude it from Phase-4).
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  await fs.writeFile(path.join(adir, 'foo.md'), `---
+first_seen: ${today}
+---
+fired yesterday
+`);
+
+  const r = await runCli(['--memory-root', dir, '--today', today]);
+  assert.equal(r.code, 0, `stderr: ${r.stderr}`);
+  // Phase-4 line: 3 files, 3 replacements, contradictions=stub
+  assert.match(r.stdout, /\[phase-4\] dates files=3 replacements=3 contradictions=stub/);
+  // Staged paths exist
+  const stagedRoot = path.join(dir, 'archive', 'dreams', today, 'staged');
+  await fs.access(path.join(stagedRoot, 'working-memory.md.tmp'));
+  await fs.access(path.join(stagedRoot, 'session-index.md.tmp'));
+  await fs.access(path.join(stagedRoot, 'patterns', 'active', 'foo.md.tmp'));
+  // Content reflects the rewrite
+  const c = await fs.readFile(path.join(stagedRoot, 'working-memory.md.tmp'), 'utf8');
+  assert.match(c, /updated 2026-05-10/);
+});
+
 test('CLI E2E: dry-run skips phase-3 staging but reports the plan', async () => {
   const today = '2026-05-10';
   const dir = await tmpDir();
