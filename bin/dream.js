@@ -229,9 +229,9 @@ function notifyMacOS({ title, message, suppress }) {
  * Failure (network down, bad token, rate-limited, --no-telegram) NEVER
  * fails the worker. Suppressed by --no-notify (umbrella) or --no-telegram.
  */
-async function notifyTelegram({ token, chatId, threadId, title, message, suppress }) {
-  if (suppress) return;
-  if (!token || !chatId) return; // not configured — silent skip
+async function notifyTelegram({ token, chatId, threadId, title, message, suppress, verbose = false }) {
+  if (suppress) return { skipped: true, reason: 'suppressed' };
+  if (!token || !chatId) return { skipped: true, reason: 'not configured (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID unset)' };
   try {
     const text = `*${title}*\n\`\`\`\n${String(message).slice(0, 3500)}\n\`\`\``;
     const body = {
@@ -247,17 +247,28 @@ async function notifyTelegram({ token, chatId, threadId, title, message, suppres
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         signal: ctrl.signal,
       });
+      if (verbose) {
+        const respBody = await res.text();
+        let parsed = null;
+        try { parsed = JSON.parse(respBody); } catch {}
+        return {
+          ok: res.ok && parsed?.ok === true,
+          status: res.status,
+          response: parsed || respBody.slice(0, 500),
+        };
+      }
+      return { ok: res.ok };
     } finally {
       clearTimeout(timer);
     }
-  } catch {
-    // Best-effort; never block the run.
+  } catch (e) {
+    return { ok: false, error: e.message };
   }
 }
 
@@ -324,13 +335,49 @@ export async function main(argv = process.argv.slice(2)) {
     process.stdout.write(`  TELEGRAM_BOT_TOKEN: ${process.env.TELEGRAM_BOT_TOKEN ? '<set>' : '<unset>'}\n`);
     process.stdout.write(`  TELEGRAM_CHAT_ID:   ${process.env.TELEGRAM_CHAT_ID || '<unset>'}\n`);
     process.stdout.write(`  TELEGRAM_THREAD_ID: ${process.env.TELEGRAM_THREAD_ID || '<unset>'}\n`);
-    await notifyAll({
-      title: `dream-mgmt ${today} (test)`,
+
+    const title = `dream-mgmt ${today} (test)`;
+
+    // macOS bubble — fire-and-forget.
+    notifyMacOS({ title, message, suppress: false });
+
+    // Telegram — fire with verbose:true so we can surface the API response
+    // for debugging. Token redaction: notifyTelegram doesn't log the token;
+    // the response is the API's reply body which Telegram does NOT echo
+    // tokens into. Safe to print.
+    const tgResult = await notifyTelegram({
+      token: process.env.TELEGRAM_BOT_TOKEN,
+      chatId: process.env.TELEGRAM_CHAT_ID,
+      threadId: process.env.TELEGRAM_THREAD_ID,
+      title,
       message,
       suppress: false,
-      suppressTelegram: false,
+      verbose: true,
     });
-    process.stdout.write(`[test-notify] sent (best-effort; check Telegram + Notification Center)\n`);
+    if (tgResult.skipped) {
+      process.stdout.write(`[test-notify] Telegram: SKIPPED — ${tgResult.reason}\n`);
+    } else if (tgResult.ok) {
+      process.stdout.write(`[test-notify] Telegram: OK (HTTP ${tgResult.status})\n`);
+      const r = tgResult.response;
+      if (r && r.result) {
+        process.stdout.write(
+          `  message_id=${r.result.message_id} `
+          + `chat=${r.result.chat?.id} `
+          + `thread=${r.result.message_thread_id ?? 'none'}\n`,
+        );
+      }
+    } else {
+      process.stdout.write(`[test-notify] Telegram: FAILED (HTTP ${tgResult.status ?? '?'})\n`);
+      if (tgResult.error) {
+        process.stdout.write(`  error: ${tgResult.error}\n`);
+      }
+      if (tgResult.response) {
+        const r = tgResult.response;
+        const desc = r?.description ?? JSON.stringify(r).slice(0, 300);
+        process.stdout.write(`  response: ${desc}\n`);
+      }
+    }
+    process.stdout.write(`[test-notify] check macOS Notification Center for the bubble\n`);
     return 0;
   }
 
