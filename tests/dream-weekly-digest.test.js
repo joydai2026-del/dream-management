@@ -151,3 +151,38 @@ test('lastNDates: returns descending', () => {
   const out = _internals.lastNDates('2026-05-09', 3);
   assert.deepEqual(out, ['2026-05-09', '2026-05-08', '2026-05-07']);
 });
+
+test('digest (final R5): contradiction date uses dream-pass date, not run_id', async () => {
+  // Reality-checker final #5: a 3:45am wall-clock run_id is "next day" —
+  // pendingContradictions[].date must come from the dream-pass date
+  // (the iterating events[].date) so the per-night attribution is correct.
+  const dir = await tmpDir();
+  await placeRun(dir, '2026-05-09', {
+    ...minimalEvt('WARN'),
+    run_id: '2026-05-10T03:45:00Z', // wall clock the next day
+    contradictions_surfaced: [
+      { description: 'Rule X violated 2x', severity: 'medium' },
+    ],
+  });
+  const r = await generateWeeklyDigest({ memoryRoot: dir, today: '2026-05-10' });
+  assert.equal(r.summary.pending_contradictions[0].date, '2026-05-09');
+  assert.notEqual(r.summary.pending_contradictions[0].date, '2026-05-10');
+});
+
+test('digest (final R6): reinforce entries with missing sightings_after render cleanly', async () => {
+  // Reality-checker final #6: older event.json shapes may lack
+  // sightings_after on reinforce entries. Render must not produce
+  // `pattern→undefined`; fall back to bare pattern name.
+  const dir = await tmpDir();
+  await placeRun(dir, '2026-05-09', {
+    ...minimalEvt('PASS'),
+    routed: {
+      patterns_reinforced: [{ pattern: 'no-after-field' }],
+      patterns_promoted: [],
+      patterns_promotion_declined: [],
+    },
+  });
+  const r = await generateWeeklyDigest({ memoryRoot: dir, today: '2026-05-09' });
+  assert.doesNotMatch(r.content, /undefined/);
+  assert.match(r.content, /no-after-field/);
+});

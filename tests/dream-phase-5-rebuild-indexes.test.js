@@ -72,6 +72,61 @@ test('buildPreAction: empty active dir produces a no-patterns notice', async () 
   assert.match(out, /No active patterns yet/);
 });
 
+test('buildPreAction (final R3): demoted patterns excluded from output', async () => {
+  // Reality-checker final #3: pre-action.md must NOT cite patterns the
+  // sweep is about to tombstone (Phase-3 demotion). buildPreAction reads
+  // patterns/active/ at staging time, BEFORE sweep removes the demoted
+  // ones; the demotedNames filter handles this.
+  const dir = await tmpDir();
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  await fs.writeFile(path.join(adir, 'keep-me.md'),
+    '---\nimportance: 9\nsightings: 5\ntitle: Keep me\n---\nbody\n');
+  await fs.writeFile(path.join(adir, 'demoted-pattern.md'),
+    '---\nimportance: 8\nsightings: 4\ntitle: Demoted\n---\nbody\n');
+  const out = await buildPreAction({
+    memoryRoot: dir, today: '2026-05-10',
+    demotedNames: ['demoted-pattern'],
+  });
+  assert.match(out, /\*\*keep-me\*\*/);
+  assert.doesNotMatch(out, /demoted-pattern/);
+});
+
+test('renderDreamLogEntry (final R4): contradictions list inline descriptions', async () => {
+  // Reality-checker final #4: JJ's morning artifact must show what the
+  // contradictions ARE, not just the count. List inline (cap 5).
+  const out = renderDreamLogEntry({
+    today: '2026-05-10',
+    verdict: 'WARN',
+    phase1Summary: { journalEntriesByBucket: {}, sessionMarkersByKind: {} },
+    phase2Summary: { scoredInsightCount: 0, aboveThresholdCount: 0 },
+    phase3Summary: {
+      correctionsArchivedBlocks: 0, correctionsKeptBlocks: 0,
+      sessionIndexArchivedBlocks: 0, sessionIndexKeptBlocks: 0,
+      journalArchived: 0, demotedCount: 0,
+    },
+    phase4Summary: {
+      filesWithReplacements: 0, totalReplacements: 0,
+      contradictionCount: 2, contradictionsStub: false,
+      workingMemoryOverflowSkipped: 0,
+    },
+    routePlan: { reinforce: [], promote: [], declined: [], removeReference: [] },
+    prunePlan: {
+      corrections: { archive: [] }, sessionIndex: { archive: [] },
+      journal: {}, demotions: [],
+    },
+    datesPlan: {
+      byFile: [],
+      contradictions: [
+        { description: 'Pattern caveman violated 3x in 14d', severity: 'high' },
+        { description: 'Rule X conflicts with Rule Y', severity: 'medium' },
+      ],
+    },
+  });
+  assert.match(out, /\[high\] Pattern caveman violated 3x/);
+  assert.match(out, /\[medium\] Rule X conflicts with Rule Y/);
+});
+
 test('buildPreAction: top-N sorted by importance, then sightings, then alpha', async () => {
   const dir = await tmpDir();
   const adir = path.join(dir, 'patterns', 'active');

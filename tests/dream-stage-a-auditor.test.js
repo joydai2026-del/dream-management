@@ -786,6 +786,40 @@ test('lineCount helper handles trailing-newline correctly (F-A)', () => {
   assert.equal(_internals.lineCount('\na'), 2);
 });
 
+test('C10 fail (final R3): tombstone targeting archive/* path (immutability)', async () => {
+  // Reality-checker final #2: archive paths can be appended (.tmp w/
+  // sidecar) but never deleted. A tombstone targeting archive/<…> is a
+  // contract violation — Stage A surfaces it upstream of sweep's F3.
+  const dir = await tmpDir();
+  const { dreamDir, today } = await scaffoldMinimalTree(dir);
+  await writeFile(
+    path.join(dreamDir, 'staged', 'archive', 'corrections', '2026-04.md.tombstone'),
+    JSON.stringify({ removed_path: 'archive/corrections/2026-04.md' }) + '\n',
+  );
+  const result = await runStageA({ memoryRoot: dir, dreamDir, today });
+  const c10 = result.findings.filter(f => f.check === 'append_only_intact');
+  assert.ok(c10.some(f => /archive path staged for delete/.test(f.message)));
+  assert.equal(result.verdict, 'FAIL');
+});
+
+test('C10 happy: archive/<…>.md.tmp (rewrite + append) is permitted', async () => {
+  // Phase 3's normal archive-append flow uses a .tmp + sidecar — this
+  // must NOT trip C10 (only .tombstone is forbidden on archive paths).
+  const dir = await tmpDir();
+  const { dreamDir, today } = await scaffoldMinimalTree(dir);
+  await writeFile(
+    path.join(dreamDir, 'staged', 'archive', 'corrections', '2026-04.md.tmp'),
+    'archive content\n',
+  );
+  await writeFile(
+    path.join(dreamDir, 'staged', 'archive', 'corrections', '2026-04.md.tmp.preimage-sha256'),
+    JSON.stringify({ schema_version: '1.0.0', sha256: null }) + '\n',
+  );
+  const result = await runStageA({ memoryRoot: dir, dreamDir, today });
+  const c10 = result.findings.filter(f => f.check === 'append_only_intact');
+  assert.equal(c10.length, 0);
+});
+
 test('extractH3Blocks captures heading + body + dateISO', () => {
   const text = '# Title\n\n### entry 2026-04-01\n\nbody text\n';
   const blocks = _internals.extractH3Blocks(text);

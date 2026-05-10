@@ -42,6 +42,30 @@ test('acquireLock writes a JSON lock and release deletes it', async () => {
   await assert.rejects(() => fs.access(path.join(dir, '.dream.lock')));
 });
 
+test('acquireLock + lock.update: no orphan .dream-recovery.lock.tmp.* files (final R1 #1)', async () => {
+  // Reality-checker final #1: each lock.update() previously hardlinked
+  // a .tmp file into the live tree but never unlinked it on success.
+  // Verify the fix: after multiple lock.update calls, the live tree
+  // contains zero orphan .tmp files.
+  const dir = await tmpDir();
+  // Force the recovery-lock path by holding a stale lock first.
+  const oldDate = new Date(Date.now() - 60 * 60 * 1000);
+  await fs.writeFile(path.join(dir, '.dream.lock'), JSON.stringify({
+    schema_version: '1.0.0', pid: 99999, hostname: os.hostname(),
+    started_at: oldDate.toISOString(), phase: 'phase-0-safety',
+  }));
+  const lock = await acquireLock(dir);
+  // Drive multiple update calls — each takes the recovery-lock mutex.
+  for (const phase of ['phase-1', 'phase-2', 'phase-3', 'phase-4', 'phase-5']) {
+    await lock.update(phase);
+  }
+  // Inspect live tree.
+  const entries = await fs.readdir(dir);
+  const orphanTmps = entries.filter(n => n.includes('.dream-recovery.lock.tmp.'));
+  assert.deepEqual(orphanTmps, [], `expected no orphan tmp files, found: ${JSON.stringify(orphanTmps)}`);
+  await lock.release();
+});
+
 test('acquireLock refuses when a fresh lock from a live pid exists', async () => {
   const dir = await tmpDir();
   await fs.writeFile(path.join(dir, '.dream.lock'), JSON.stringify({
