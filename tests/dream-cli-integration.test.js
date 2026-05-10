@@ -51,6 +51,8 @@ async function runCli(args) {
         ...process.env,
         DREAM_ALLOW_AUDIT_BYPASS: '1',
         DREAM_NO_NOTIFY: '1',
+        TELEGRAM_BOT_TOKEN: '',
+        TELEGRAM_CHAT_ID: '',
       },
     });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
@@ -211,6 +213,24 @@ test('weekly digest: does NOT fire on non-Sunday', async () => {
   const dir = await setupMin('2026-05-09'); // 2026-05-09 is a Saturday
   const r = await runCli(['--memory-root', dir, '--today', '2026-05-09']);
   assert.doesNotMatch(r.stdout, /\[digest\]/);
+});
+
+test('notification: --no-telegram suppresses Telegram only (macOS still fires)', async () => {
+  // Hard to assert macOS fired (it's detached + best-effort), but we
+  // CAN assert the flag is accepted + run completes cleanly.
+  const dir = await setupMin();
+  const r = await runCli([
+    '--memory-root', dir, '--today', '2026-05-09',
+    '--skip-dual-gate', '--skip-audit', '--no-telegram',
+  ]);
+  assert.equal(r.code, 0);
+});
+
+test('notification: usage mentions Telegram env vars + --no-telegram', async () => {
+  const r = await runCli(['--help']);
+  assert.match(r.stdout, /TELEGRAM_BOT_TOKEN/);
+  assert.match(r.stdout, /TELEGRAM_CHAT_ID/);
+  assert.match(r.stdout, /--no-telegram/);
 });
 
 test('notification: --no-notify suppresses notifyMacOS (test path)', async () => {

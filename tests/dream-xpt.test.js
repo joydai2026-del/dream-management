@@ -164,6 +164,8 @@ async function runCli(dir, today, extraArgs = []) {
         ...process.env,
         DREAM_ALLOW_AUDIT_BYPASS: '1',
         DREAM_NO_NOTIFY: '1',
+        TELEGRAM_BOT_TOKEN: '',
+        TELEGRAM_CHAT_ID: '',
       },
     });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
@@ -390,7 +392,13 @@ test('XPT-5: actual SIGKILL mid-run + same-date retry is idempotent', async () =
   // Run 1: spawn, wait for [phase-2] line in stdout, then SIGKILL.
   const child = spawn('node', [BIN, '--memory-root', dir, '--today', today,
     '--skip-stage-b', '--skip-dual-gate'], {
-    env: { ...process.env, DREAM_ALLOW_AUDIT_BYPASS: '1', DREAM_NO_NOTIFY: '1' },
+    env: {
+      ...process.env,
+      DREAM_ALLOW_AUDIT_BYPASS: '1',
+      DREAM_NO_NOTIFY: '1',
+      TELEGRAM_BOT_TOKEN: '',
+      TELEGRAM_CHAT_ID: '',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';

@@ -57,7 +57,7 @@ const VALUE_FLAGS = new Set([
 ]);
 const BOOLEAN_FLAGS = new Set([
   '--dry-run', '--skip-dual-gate', '--skip-stage-b', '--skip-audit',
-  '--no-notify',
+  '--no-notify', '--no-telegram',
 ]);
 const HELP_FLAGS = new Set(['--help', '-h']);
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -154,8 +154,15 @@ P5 worker — full pipeline: dual-gate → phase-0..5 stage → Stage A → Stag
   --skip-dual-gate     Run regardless of cadence-gate (manual debug).
   --skip-stage-b       Skip Stage B codex audit (use when codex CLI unavailable).
   --skip-audit         Skip Stage A + Stage B + sweep entirely (test-only).
-  --no-notify          Suppress macOS Notification Center bubble at end of run.
+  --no-notify          Suppress ALL notifications (macOS + Telegram) at end of run.
+  --no-telegram        Suppress just Telegram (keep macOS bubble).
   --stage-b-command    Override Stage B command (default: 'codex exec --skip-git-repo-check').
+
+Notification env vars (read by the worker):
+  TELEGRAM_BOT_TOKEN      Bot token from @BotFather (Telegram channel)
+  TELEGRAM_CHAT_ID        Chat or group ID to message
+  DREAM_NO_NOTIFY=1       Same as --no-notify (umbrella suppress)
+  DREAM_NO_TELEGRAM=1     Same as --no-telegram
 
 Exit codes:
   0  success (PASS, WARN, or SKIP)
@@ -200,6 +207,65 @@ function notifyMacOS({ title, message, suppress }) {
   } catch {
     // Pure best-effort. Never throw.
   }
+}
+
+/**
+ * Best-effort Telegram bot notification. Skips silently when
+ * TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID env vars are absent.
+ *
+ * Bot setup (one-time):
+ *   1. Talk to @BotFather on Telegram → /newbot → save the token
+ *   2. Send the bot any message → visit
+ *      https://api.telegram.org/bot<TOKEN>/getUpdates → copy chat.id
+ *   3. Configure via launchd plist EnvironmentVariables, OR export
+ *      TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID before running bin/dream.js
+ *
+ * The dream worker uses Telegram's HTTPS API directly — no SDK, no
+ * dependency. Markdown formatting supported.
+ *
+ * Failure (network down, bad token, rate-limited, --no-telegram) NEVER
+ * fails the worker. Suppressed by --no-notify (umbrella) or --no-telegram.
+ */
+async function notifyTelegram({ token, chatId, title, message, suppress }) {
+  if (suppress) return;
+  if (!token || !chatId) return; // not configured — silent skip
+  try {
+    const text = `*${title}*\n\`\`\`\n${String(message).slice(0, 3500)}\n\`\`\``;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text,
+          parse_mode: 'Markdown',
+          disable_notification: false,
+        }),
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Best-effort; never block the run.
+  }
+}
+
+/**
+ * Fan-out notification dispatch. Each channel is independent + fire-and-
+ * forget: macOS bubble, Telegram message. Add new channels here.
+ */
+async function notifyAll({ title, message, suppress, suppressTelegram }) {
+  notifyMacOS({ title, message, suppress });
+  await notifyTelegram({
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    chatId: process.env.TELEGRAM_CHAT_ID,
+    title,
+    message,
+    suppress: suppress || suppressTelegram,
+  });
 }
 
 function isSunday(isoDate) {
@@ -257,8 +323,10 @@ export async function main(argv = process.argv.slice(2)) {
   const skipStageB = args.skipStageB;
   const skipAudit = args.skipAudit;
   const noNotify = args.noNotify || process.env.DREAM_NO_NOTIFY === '1';
+  const noTelegram = args.noTelegram || process.env.DREAM_NO_TELEGRAM === '1';
   const stageBCommandLine = args.stageBCommand || null;
   const notifyTitle = `dream-mgmt ${today}`;
+  const notifyOpts = { suppress: noNotify, suppressTelegram: noTelegram };
 
   // Production audit-bypass guard. --skip-audit and --skip-stage-b weaken
   // the integrity guarantees of the run; in test/dev they're necessary
@@ -296,10 +364,10 @@ export async function main(argv = process.argv.slice(2)) {
         process.stderr.write(`warn: dual-gate SKIP couldn't append to .dream-log.md: ${e.message}\n`);
       }
       process.stdout.write(`[dual-gate] SKIP — ${gate.reason}\n`);
-      notifyMacOS({
+      await notifyAll({
         title: notifyTitle,
         message: `SKIP — ${gate.reason}`,
-        suppress: noNotify,
+        ...notifyOpts,
       });
       return 0;
     }
@@ -564,12 +632,12 @@ export async function main(argv = process.argv.slice(2)) {
           stageB: stageBResult,
           sweep: sweepResult,
         });
-        notifyMacOS({
+        await notifyAll({
           title: notifyTitle,
           message:
             `FAIL (sweep aborted) — conflicts=${sweepResult.conflicts.length} `
             + `errors=${sweepResult.errors.length}. Inspect archive/dreams/${today}/staged/`,
-          suppress: noNotify,
+          ...notifyOpts,
         });
         return 5;
       }
@@ -615,10 +683,10 @@ export async function main(argv = process.argv.slice(2)) {
       const hint = first ? first.message.slice(0, 80) : 'audit failed';
       notifyMessage = `FAIL — ${hint}; see archive/dreams/${today}/`;
     }
-    notifyMacOS({
+    await notifyAll({
       title: notifyTitle,
       message: notifyMessage,
-      suppress: noNotify,
+      ...notifyOpts,
     });
 
     return finalVerdict === 'FAIL' ? 5 : 0;

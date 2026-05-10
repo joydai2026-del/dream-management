@@ -59,7 +59,9 @@ async function runCli(args, opts = {}) {
       env: {
         ...process.env,
         DREAM_ALLOW_AUDIT_BYPASS: '1',
-        DREAM_NO_NOTIFY: '1', // suppress macOS notifications during tests
+        DREAM_NO_NOTIFY: '1', // suppress macOS + Telegram during tests
+        TELEGRAM_BOT_TOKEN: '',
+        TELEGRAM_CHAT_ID: '',
       },
     });
     return { code: 0, stdout: r.stdout, stderr: r.stderr };
