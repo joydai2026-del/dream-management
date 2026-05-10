@@ -33,6 +33,7 @@ import { runRoute } from '../lib/dream/phase-2-route.js';
 import { stageRoutePlan } from '../lib/dream/stage-route.js';
 import { loadPatterns } from '../lib/dream/load-patterns.js';
 import { readAllEntries } from '../lib/firing-log-read.js';
+import { runPrune, stagePrunePlan } from '../lib/dream/phase-3-prune.js';
 
 const VALUE_FLAGS = new Set(['--memory-root', '--since', '--repo-root', '--today', '--config']);
 const BOOLEAN_FLAGS = new Set(['--dry-run']);
@@ -120,7 +121,7 @@ function usage() {
   return `Usage: dream --memory-root <path> [--dry-run] [--since YYYY-MM-DD]
                   [--repo-root <path>] [--today YYYY-MM-DD]
 
-P4 starter + Phase-2 ROUTE — phase-0 (safety) + phase-1 (replay) + phase-2 (route).
+P4 worker — phase-0 (safety) + phase-1 (replay) + phase-2 (route) + phase-3 (prune).
   --memory-root  Required. The agent's memory directory.
   --dry-run      No mutation: skip git tag and snapshot; still scan replay.
   --since        Limit session-log scan to dates ≥ this ISO date.
@@ -249,12 +250,40 @@ export async function main(argv = process.argv.slice(2)) {
       + `declined=${plan.declined.length}\n`,
     );
 
+    const dreamDir = path.join(memoryRoot, 'archive', 'dreams', today);
     if (dryRun) {
       process.stdout.write(`[phase-2] DRY-RUN skip stage\n`);
     } else if (plan.reinforce.length > 0 || plan.promote.length > 0) {
-      const dreamDir = path.join(memoryRoot, 'archive', 'dreams', today);
       const stageResult = await stageRoutePlan({ plan, dreamDir, memoryRoot, today });
       process.stdout.write(`[phase-2] staged=${stageResult.stagedFiles.length}\n`);
+    }
+
+    // Phase 3 — PRUNE. Consolidate corrections, session-index, today's
+    // journal, and stale active patterns. Live tree unaffected; everything
+    // lands under archive/dreams/<date>/staged/ for the P5 sweep step.
+    await lock.update('phase-3-prune');
+    const pruneResult = await runPrune({
+      memoryRoot,
+      today,
+      firingEntries,
+    });
+    const pruneSummary = pruneResult.summary;
+    process.stdout.write(
+      `[phase-3] corrections=${pruneSummary.correctionsArchivedBlocks} `
+      + `sessions=${pruneSummary.sessionIndexArchivedBlocks} `
+      + `journal=${pruneSummary.journalArchived} `
+      + `demoted=${pruneSummary.demotedCount}\n`,
+    );
+
+    if (dryRun) {
+      process.stdout.write(`[phase-3] DRY-RUN skip stage\n`);
+    } else {
+      const pruneStage = await stagePrunePlan({
+        plan: pruneResult.plan, dreamDir, memoryRoot, today,
+      });
+      if (pruneStage.stagedFiles.length > 0) {
+        process.stdout.write(`[phase-3] staged=${pruneStage.stagedFiles.length}\n`);
+      }
     }
 
     return 0;
