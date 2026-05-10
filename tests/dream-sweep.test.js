@@ -482,19 +482,49 @@ test('F3: tombstone targeting archive/* path → fail (append-only violation)', 
   assert.ok(result.issues.some(i => /append-only archive/.test(i.message)));
 });
 
-test('BR-5: orphan preimage sidecar (no .tmp) → fail finding', async () => {
+test('BR-5 (R2): orphan preimage sidecar surfaces as warn, sweep continues + cleans up', async () => {
   const dir = await tmpDir();
   const { dreamDir, today } = await scaffoldDreamDir(dir);
-  // Sidecar without matching .tmp.
+  // Sidecar without matching .tmp — represents a partial-sweep restart
+  // where an archive committed but the sidecar wasn't cleaned. Should NOT
+  // block restart; should be cleaned by sweep STEP 5.
   await writeFile(
     path.join(dreamDir, 'staged', 'archive', 'corrections', '2026-04.md.tmp.preimage-sha256'),
     JSON.stringify({ sha256: null }) + '\n',
   );
   const cls = await classifyStaged(path.join(dreamDir, 'staged'));
-  assert.ok(cls.issues.some(i => /orphan preimage sidecar/.test(i.message)));
-  // runSweep aborts since sweepable=false.
+  assert.ok(cls.issues.some(i => /orphan preimage sidecar/.test(i.message) && i.severity === 'warn'));
+  // sweepable=true (only warn issues).
+  assert.equal(cls.sweepable, true);
   const result = await runSweep({ memoryRoot: dir, dreamDir, today });
-  assert.equal(result.aborted, true);
+  assert.equal(result.aborted, false);
+  // Staged tree cleaned at end of sweep (STEP 5), so the orphan sidecar is gone.
+  const stagedExists = await fileOrNull(
+    path.join(dreamDir, 'staged', 'archive', 'corrections', '2026-04.md.tmp.preimage-sha256'),
+  );
+  assert.equal(stagedExists, null);
+});
+
+test('BR-5 (R2) partial-sweep restart: sweep that committed one archive can re-enter cleanly', async () => {
+  const dir = await tmpDir();
+  const { dreamDir, today } = await scaffoldDreamDir(dir);
+  const stagedDir = path.join(dreamDir, 'staged');
+  // Stage two archives. First sweep commits both. Then we re-create state
+  // mimicking a crash mid-loop: simulate by leaving a fresh stagedDir with
+  // an orphan sidecar (no .tmp) from a previously-committed archive.
+  await writeFile(path.join(stagedDir, 'archive', 'corrections', '2026-04.md.tmp'),
+    'first\n');
+  await writeFile(
+    path.join(stagedDir, 'archive', 'corrections', '2026-04.md.tmp.preimage-sha256'),
+    JSON.stringify({ sha256: null }) + '\n',
+  );
+  await writeFile(path.join(stagedDir, 'corrections.md.tmp'), 'src content\n');
+  const result = await runSweep({ memoryRoot: dir, dreamDir, today });
+  assert.equal(result.aborted, false);
+  assert.deepEqual(result.swept.sort(), ['archive/corrections/2026-04.md', 'corrections.md'].sort());
+  // Live archive committed.
+  assert.equal(await fs.readFile(path.join(dir, 'archive', 'corrections', '2026-04.md'), 'utf8'),
+    'first\n');
 });
 
 test('F1: TOCTOU re-verify fires when live archive mutates between pre-flight and rename', async () => {
@@ -572,6 +602,81 @@ test('BR-4: heading regex tolerates extra whitespace + multiple verdict words', 
   });
   const dle = await fs.readFile(path.join(dreamDir, 'dream-log-entry.md'), 'utf8');
   assert.match(dle, /^## 2026-05-09 WARN$/m);
+});
+
+test('F4 (R2): user content appended AFTER footer survives re-run (no duplication)', async () => {
+  const dir = await tmpDir();
+  const { dreamDir } = await scaffoldDreamDir(dir);
+  const args = {
+    dreamDir, finalVerdict: 'PASS',
+    stageA: { verdict: 'PASS', findings: [] },
+    stageB: { verdict: 'PASS', findings: [] },
+    sweep: { swept: ['a'], deleted: [], conflicts: [], errors: [], aborted: false },
+  };
+  await finalizeAuditVerdicts(args);
+  // User adds manual notes AFTER the footer (realistic Obsidian use).
+  let dle = await fs.readFile(path.join(dreamDir, 'dream-log-entry.md'), 'utf8');
+  dle = dle + '\n## JJ notes\n\nGood run, all clean.\n';
+  await fs.writeFile(path.join(dreamDir, 'dream-log-entry.md'), dle);
+  // Re-run finalize.
+  await finalizeAuditVerdicts(args);
+  const out = await fs.readFile(path.join(dreamDir, 'dream-log-entry.md'), 'utf8');
+  // Sentinel pair appears EXACTLY once.
+  const startCount = (out.match(/DREAM-AUDIT-FOOTER-START/g) || []).length;
+  assert.equal(startCount, 1, `expected 1 start sentinel, got ${startCount}`);
+  // User notes survived.
+  assert.match(out, /## JJ notes/);
+  assert.match(out, /Good run, all clean/);
+});
+
+test('F4 (R2): malformed sentinels (orphan START) → throws', async () => {
+  const dir = await tmpDir();
+  const { dreamDir } = await scaffoldDreamDir(dir);
+  // Orphan START sentinel without END.
+  await writeFile(path.join(dreamDir, 'dream-log-entry.md'),
+    '## 2026-05-09 PASS-TENTATIVE\n\nbody.\n\n<!-- DREAM-AUDIT-FOOTER-START -->\nstale\n');
+  await assert.rejects(
+    () => finalizeAuditVerdicts({
+      dreamDir, finalVerdict: 'PASS',
+      stageA: { verdict: 'PASS', findings: [] },
+      stageB: { verdict: 'PASS', findings: [] },
+    }),
+    /sentinel count mismatch/,
+  );
+});
+
+test('F4 (R2): multiple footer pairs → throws (refuse silent recovery)', async () => {
+  const dir = await tmpDir();
+  const { dreamDir } = await scaffoldDreamDir(dir);
+  await writeFile(path.join(dreamDir, 'dream-log-entry.md'),
+    '## 2026-05-09 PASS\n\n<!-- DREAM-AUDIT-FOOTER-START -->\na\n<!-- DREAM-AUDIT-FOOTER-END -->\n<!-- DREAM-AUDIT-FOOTER-START -->\nb\n<!-- DREAM-AUDIT-FOOTER-END -->\n');
+  await assert.rejects(
+    () => finalizeAuditVerdicts({
+      dreamDir, finalVerdict: 'PASS',
+      stageA: { verdict: 'PASS', findings: [] },
+      stageB: { verdict: 'PASS', findings: [] },
+    }),
+    /sentinel count mismatch/,
+  );
+});
+
+test('BR-1 (R2): tombstone-phase first error truly skips remaining tombstones', async () => {
+  const dir = await tmpDir();
+  const { dreamDir, today } = await scaffoldDreamDir(dir);
+  const stagedDir = path.join(dreamDir, 'staged');
+  // Two tombstones: first targets a directory (unlink fails EPERM/EISDIR);
+  // second targets a normal file. R2: must NOT delete the second after
+  // first failed.
+  await fs.mkdir(path.join(dir, 'x', 'first.md'), { recursive: true });
+  await writeFile(path.join(dir, 'x', 'first.md', 'inner'), 'block');
+  await writeFile(path.join(dir, 'x', 'second.md'), 'should survive\n');
+  await writeFile(path.join(stagedDir, 'x', 'first.md.tombstone'), '{}\n');
+  await writeFile(path.join(stagedDir, 'x', 'second.md.tombstone'), '{}\n');
+  const result = await runSweep({ memoryRoot: dir, dreamDir, today });
+  assert.equal(result.aborted, true);
+  assert.equal(result.errors.length, 1);
+  // Second tombstone target NOT deleted (true break-on-first-error).
+  assert.equal(await fileOrNull(path.join(dir, 'x', 'second.md')), 'should survive\n');
 });
 
 test('F4: finalizeAuditVerdicts is idempotent on re-run (footer not duplicated)', async () => {
