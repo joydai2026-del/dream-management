@@ -569,10 +569,16 @@ export async function main(argv = process.argv.slice(2)) {
     // journal, and stale active patterns. Live tree unaffected; everything
     // lands under archive/dreams/<date>/staged/ for the P5 sweep step.
     await lock.update('phase-3-prune');
+    // Pass Phase 2's reinforcement list so Phase 3's demotion logic skips
+    // patterns that just fired this run. Without this, Phase 2 stages a
+    // .tmp for the reinforced pattern AND Phase 3 stages a .tombstone for
+    // the same path → sweep's BR-7 worker-bug guard refuses to commit.
+    const reinforcedNames = (plan.reinforce || []).map(r => r.pattern);
     const pruneResult = await runPrune({
       memoryRoot,
       today,
       firingEntries,
+      reinforcedNames,
     });
     const pruneSummary = pruneResult.summary;
     process.stdout.write(

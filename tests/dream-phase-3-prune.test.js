@@ -261,7 +261,7 @@ Body content.
   const { plan } = await runPrune({
     memoryRoot: dir,
     today: '2026-05-10',
-    firingEntries: [],
+    firingEntries: [{ session: "2026-05-09-1", firings: [{ pattern: "decoy-keeps-firing-log-non-empty", outcome: "applied" }] }],
     now: new Date('2026-05-10T03:00:00Z'),
   });
   assert.equal(plan.demotions.length, 1);
@@ -379,7 +379,7 @@ body
   const { plan } = await runPrune({
     memoryRoot: dir,
     today: '2026-05-10',
-    firingEntries: [],
+    firingEntries: [{ session: "2026-05-09-1", firings: [{ pattern: "decoy-keeps-firing-log-non-empty", outcome: "applied" }] }],
     now: new Date('2026-05-10T03:00:00Z'),
   });
   // Only old-stale qualifies; fresh-promo gets the grace pass.
@@ -403,7 +403,7 @@ body
   const { plan } = await runPrune({
     memoryRoot: dir,
     today: '2026-05-10', // exactly 60 days from 2026-03-11
-    firingEntries: [],
+    firingEntries: [{ session: "2026-05-09-1", firings: [{ pattern: "decoy-keeps-firing-log-non-empty", outcome: "applied" }] }],
     now: new Date('2026-05-10T03:00:00Z'),
   });
   assert.equal(plan.demotions.length, 0);
@@ -423,7 +423,7 @@ body
   const { plan } = await runPrune({
     memoryRoot: dir,
     today: '2026-05-10',
-    firingEntries: [],
+    firingEntries: [{ session: "2026-05-09-1", firings: [{ pattern: "decoy-keeps-firing-log-non-empty", outcome: "applied" }] }],
     gates: { demotionGracePeriodDays: 1 }, // 1-day grace, recent is 5d → demote
     now: new Date('2026-05-10T03:00:00Z'),
   });
@@ -645,4 +645,65 @@ test('stagePrunePlan: sidecar is staged BEFORE archive .tmp (Codex R2 ordering)'
   assert.ok(sidecarIdx >= 0, 'expected sidecar present');
   assert.ok(tmpIdx >= 0, 'expected archive .tmp present');
   assert.ok(sidecarIdx < tmpIdx, `sidecar (idx ${sidecarIdx}) must precede archive .tmp (idx ${tmpIdx})`);
+});
+
+// Regression tests for 2026-05-11 production bug ("no notification this morning")
+
+test('runPrune: empty firingEntries → no demotions (safety bias when firing log unseeded)', async () => {
+  // Production-bug 2026-05-11: launchd-driven dream worker demoted 9/10
+  // active patterns wholesale because pattern-firing-log.md didn't exist
+  // → demotionCandidates returned every active pattern (none "fired" in
+  // the window because nothing was recorded). Safety bias: defer ALL
+  // demotion until the firing log produces evidence.
+  const dir = await tmpDir();
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  // Three old patterns w/ first_seen well past the grace period
+  for (const name of ['a', 'b', 'c']) {
+    await fs.writeFile(path.join(adir, `${name}.md`),
+      `---\ntitle: ${name}\nfirst_seen: 2025-01-01\n---\nbody\n`);
+  }
+  await fs.writeFile(path.join(dir, 'corrections.md'), '# c\n');
+  await fs.writeFile(path.join(dir, 'session-index.md'), '# s\n');
+  // No pattern-firing-log.md, empty firingEntries.
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-11',
+    firingEntries: [],
+    now: new Date('2026-05-11T03:00:00Z'),
+  });
+  assert.equal(plan.demotions.length, 0,
+    'expected zero demotions when firing log is empty');
+});
+
+test('runPrune: reinforcedNames skips demotion for Phase-2 reinforced patterns', async () => {
+  // Production-bug 2026-05-11: Phase 2 reinforced `codex-review-per-phase-gate`
+  // (staging a .tmp), Phase 3 simultaneously demoted it (staging a
+  // .tombstone). Sweep's BR-7 guard correctly refused the combination but
+  // the run aborted. Fix: Phase 3's planDemotions accepts reinforcedNames
+  // and skips them — reinforcement is fresh evidence the rule fired.
+  const dir = await tmpDir();
+  const adir = path.join(dir, 'patterns', 'active');
+  await fs.mkdir(adir, { recursive: true });
+  await fs.writeFile(path.join(adir, 'reinforced.md'),
+    '---\ntitle: reinforced\nfirst_seen: 2025-01-01\n---\nbody\n');
+  await fs.writeFile(path.join(adir, 'not-reinforced.md'),
+    '---\ntitle: not-reinforced\nfirst_seen: 2025-01-01\n---\nbody\n');
+  await fs.writeFile(path.join(dir, 'corrections.md'), '# c\n');
+  await fs.writeFile(path.join(dir, 'session-index.md'), '# s\n');
+  // Decoy firing so the safety-bias check passes through.
+  const firingEntries = [
+    { session: '2026-05-09-1', firings: [{ pattern: 'decoy', outcome: 'applied' }] },
+  ];
+  const { plan } = await runPrune({
+    memoryRoot: dir,
+    today: '2026-05-11',
+    firingEntries,
+    reinforcedNames: ['reinforced'],
+    now: new Date('2026-05-11T03:00:00Z'),
+  });
+  // `not-reinforced` demotes; `reinforced` does NOT.
+  const names = plan.demotions.map(d => d.name);
+  assert.deepEqual(names, ['not-reinforced'],
+    `expected only 'not-reinforced' to demote; got: ${JSON.stringify(names)}`);
 });

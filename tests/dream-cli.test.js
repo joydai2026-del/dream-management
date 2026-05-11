@@ -185,6 +185,13 @@ body
   // Required for memory-loader compat; phase-0 reads it
   await fs.writeFile(path.join(dir, 'working-memory.md'), 'wm\n');
 
+  // Seed a non-empty pattern-firing-log.md so Phase 3's safety-bias check
+  // (no-evidence → defer-all-demotion) doesn't kick in. The decoy firing
+  // is for a non-existent pattern; the stale `old-stale` pattern correctly
+  // demotes because it has zero firings within the 60-day lookback.
+  await fs.writeFile(path.join(dir, 'pattern-firing-log.md'),
+    '```yaml\nsession: 2026-04-01-1\nfirings:\n  - pattern: decoy-non-existent\n    outcome: applied\n```\n');
+
   const r = await runCli(['--memory-root', dir, '--today', today]);
   assert.equal(r.code, 0, `stderr: ${r.stderr}`);
 
