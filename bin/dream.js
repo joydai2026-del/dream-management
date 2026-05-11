@@ -193,8 +193,14 @@ function todayISO(d = new Date()) {
  * entry.
  */
 function notifyMacOS({ title, message, suppress }) {
-  if (suppress) return;
-  if (process.platform !== 'darwin') return;
+  if (suppress) {
+    process.stdout.write(`[notify] macOS: SKIPPED (suppress)\n`);
+    return;
+  }
+  if (process.platform !== 'darwin') {
+    process.stdout.write(`[notify] macOS: SKIPPED (non-darwin platform=${process.platform})\n`);
+    return;
+  }
   try {
     const escapeAS = s => String(s == null ? '' : s)
       .replace(/[\\"]/g, '\\$&')
@@ -205,10 +211,14 @@ function notifyMacOS({ title, message, suppress }) {
       stdio: 'ignore',
       detached: true,
     });
-    child.on('error', () => {}); // swallow ENOENT etc.
+    child.on('error', e => {
+      // Log + swallow. osascript missing or refused — Telegram still handles it.
+      process.stdout.write(`[notify] macOS: FAILED to spawn osascript (${e.code || e.message})\n`);
+    });
     child.unref();
-  } catch {
-    // Pure best-effort. Never throw.
+    process.stdout.write(`[notify] macOS: fired (detached osascript)\n`);
+  } catch (e) {
+    process.stdout.write(`[notify] macOS: EXCEPTION ${e.message}\n`);
   }
 }
 
@@ -278,14 +288,30 @@ async function notifyTelegram({ token, chatId, threadId, title, message, suppres
  */
 async function notifyAll({ title, message, suppress, suppressTelegram }) {
   notifyMacOS({ title, message, suppress });
-  await notifyTelegram({
+  // Production notifyTelegram now uses verbose:true so the [notify] line
+  // reports actual delivery state. Token is never echoed; only the API
+  // response metadata (chat id, thread, error description) shows up.
+  const tg = await notifyTelegram({
     token: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID,
     threadId: process.env.TELEGRAM_THREAD_ID,
     title,
     message,
     suppress: suppress || suppressTelegram,
+    verbose: true,
   });
+  if (tg.skipped) {
+    process.stdout.write(`[notify] telegram: SKIPPED — ${tg.reason}\n`);
+  } else if (tg.ok) {
+    const meta = tg.response?.result
+      ? ` message_id=${tg.response.result.message_id}`
+      : '';
+    process.stdout.write(`[notify] telegram: OK${meta}\n`);
+  } else {
+    const status = tg.status ?? '?';
+    const desc = tg.response?.description ?? tg.error ?? 'unknown error';
+    process.stdout.write(`[notify] telegram: FAILED (HTTP ${status}) — ${String(desc).slice(0, 200)}\n`);
+  }
 }
 
 function isSunday(isoDate) {

@@ -802,6 +802,40 @@ test('C10 fail (final R3): tombstone targeting archive/* path (immutability)', a
   assert.equal(result.verdict, 'FAIL');
 });
 
+test('C5 happy (regression 2026-05-11): block heading with relative-date phrase NOT flagged after Phase 4 rewrite', async () => {
+  // Production bug 2026-05-11: a corrections.md block with heading
+  // `### Forgot yesterday's decisions on X (2026-05-07)` was flagged as
+  // missing because Phase 4 rewrote "yesterday" → "2026-05-10" in the
+  // heading, breaking C5's literal pre/post heading match. The block
+  // was NOT archived (only 4 days old, below 30d TTL); the rename was
+  // legitimate. Stage A FAIL'd, sweep skipped, no notification.
+  //
+  // Fix: C5 applies Phase 4's rewriteRelativeDates to pre headings
+  // before lookup so a renamed-only block matches its post counterpart.
+  const dir = await tmpDir();
+  const { dreamDir, today } = await scaffoldMinimalTree(dir);
+  const stagedDir = path.join(dreamDir, 'staged');
+  // Snapshot has block w/ heading containing "yesterday"; post has the
+  // same block w/ heading where Phase 4 rewrote "yesterday" → today-1.
+  const preCorrections = '# Corrections\n\n## Resolved\n\n### Forgot yesterday\'s decisions on X (2026-05-07)\n\nbody.\n';
+  await writeFile(path.join(dreamDir, 'snapshot', 'corrections.md'), preCorrections);
+  // Update manifest sha to match.
+  const manifest = JSON.parse(await fs.readFile(path.join(dreamDir, 'manifest.json'), 'utf8'));
+  const idx = manifest.files.findIndex(f => f.path === 'corrections.md');
+  manifest.files[idx].sha256 = crypto.createHash('sha256').update(preCorrections).digest('hex');
+  manifest.files[idx].bytes = Buffer.byteLength(preCorrections);
+  manifest.files[idx].lines = preCorrections.split('\n').length;
+  await writeFile(path.join(dreamDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  // Post = same block w/ heading rewritten by Phase 4 (today='2026-05-09' → yesterday='2026-05-08').
+  const postCorrections = '# Corrections\n\n## Resolved\n\n### Forgot 2026-05-08\'s decisions on X (2026-05-07)\n\nbody.\n';
+  await writeFile(path.join(stagedDir, 'corrections.md.tmp'), postCorrections);
+
+  const result = await runStageA({ memoryRoot: dir, dreamDir, today });
+  const c5 = result.findings.filter(f => f.check === 'archive_block_present');
+  assert.equal(c5.length, 0,
+    `C5 must NOT flag renamed-only blocks after Phase 4 rewrite; got: ${JSON.stringify(c5)}`);
+});
+
 test('C10 happy: archive/<…>.md.tmp (rewrite + append) is permitted', async () => {
   // Phase 3's normal archive-append flow uses a .tmp + sidecar — this
   // must NOT trip C10 (only .tombstone is forbidden on archive paths).
