@@ -1,7 +1,7 @@
 {
   "$schema": "./docs/config-reference.md",
-  "consumer_name": "claude-code-m4-vault",
-  "memory_root": "/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4",
+  "consumer_name": "my-agent",
+  "memory_root": "~/.my-agent/memory",
   "tiers": {
     "hot": {
       "working_memory": "working-memory.md",
