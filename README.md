@@ -184,4 +184,4 @@ Engineering additions not in the papers: cross-model auditor (different blind sp
 
 ---
 
-Built by [Joy Dong](https://joydong.org)
+Built by [Joy Dong](https://www.joydong.org)
