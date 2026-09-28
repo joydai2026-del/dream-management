@@ -32,7 +32,7 @@ The dream worker reads this log to:
 
 Default path: `<memory_root>/pattern-firing-log.md`. Overridable via `dream.config.json`'s `instrumentation.pattern_firing_log`.
 
-The first consumer (claude-code-m4-vault): `~/Documents/jj-knowledge-vault/agents/claude-code-m4/pattern-firing-log.md`.
+The first consumer (claude-code-m4-vault): `<vault>/agents/claude-code-m4/pattern-firing-log.md`.
 
 ---
 
@@ -66,7 +66,7 @@ The body below the header is a sequence of YAML blocks separated by `---` marker
 session: 2026-05-09-bazaar-x402-p2-t5b
 session_log: session-logs/2026-05-09.md
 project: bazaar-x402
-cwd: /Users/joyd/dev/bazaar-x402
+cwd: $HOME/dev/bazaar-x402
 duration_min: 87
 pre_action_loaded_rules:
   - external-dom-drift-llm-default
@@ -261,7 +261,7 @@ After a session where Claude built a pattern-firing-log entry classifier and JJ 
 session: 2026-05-09-dream-mgmt-p0-p1
 session_log: session-logs/2026-05-09.md
 project: dream-management
-cwd: /Users/joyd/dev/dream-management
+cwd: $HOME/dev/dream-management
 duration_min: 124
 pre_action_loaded_rules:
   - shoulders-of-giants-research-first

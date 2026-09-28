@@ -45,13 +45,13 @@ For each pattern under consideration at the time of the 2026-05-09 cleanup — b
 ```
 last_fired = max(
   mtime of the file (in active/ for active patterns, in patterns/ root for ROOT-ONLY),
-  date stem of most-recent session-log file (~/Documents/jj-knowledge-vault/agents/claude-code-m4/session-logs/YYYY-MM-DD*.md) whose contents grep-match the pattern's identifier (kebab-case stem),
-  date stem of most-recent learning-journal file (~/Documents/jj-knowledge-vault/agents/claude-code-m4/learning-journals/YYYY-MM-DD-*.md) whose contents grep-match the pattern's identifier,
-  date "2026-04-30" treated as a sentinel if the pattern's identifier appears anywhere in ~/Documents/jj-knowledge-vault/agents/claude-code-m4/corrections.md (else this term is omitted)
+  date stem of most-recent session-log file (<vault>/agents/claude-code-m4/session-logs/YYYY-MM-DD*.md) whose contents grep-match the pattern's identifier (kebab-case stem),
+  date stem of most-recent learning-journal file (<vault>/agents/claude-code-m4/learning-journals/YYYY-MM-DD-*.md) whose contents grep-match the pattern's identifier,
+  date "2026-04-30" treated as a sentinel if the pattern's identifier appears anywhere in <vault>/agents/claude-code-m4/corrections.md (else this term is omitted)
 )
 ```
 
-Date format: ISO `YYYY-MM-DD`, lexical sort (works for ISO dates within the same century). All file-system paths are absolute; mtime is local-time stat field with day-precision (`stat -f %Sm -t %Y-%m-%d`). Tie-breaks: when two patterns share an identical max date, the one with a higher `confidence:` frontmatter value is ranked higher; if confidence is equal, alphabetical filename order. The full per-pattern proxy table is recorded in the session log at `~/Documents/jj-knowledge-vault/agents/claude-code-m4/session-logs/2026-05-09-dream-mgmt-p3.md` (and the corresponding learning-journal entry).
+Date format: ISO `YYYY-MM-DD`, lexical sort (works for ISO dates within the same century). All file-system paths are absolute; mtime is local-time stat field with day-precision (`stat -f %Sm -t %Y-%m-%d`). Tie-breaks: when two patterns share an identical max date, the one with a higher `confidence:` frontmatter value is ranked higher; if confidence is equal, alphabetical filename order. The full per-pattern proxy table is recorded in the session log at `<vault>/agents/claude-code-m4/session-logs/2026-05-09-dream-mgmt-p3.md` (and the corresponding learning-journal entry).
 
 Patterns ranked by this proxy descending. Top-10 retained in `active/`; bottom-N demoted to `reference/` with bootstrap frontmatter. The 2026-05-09 cleanup demoted **16 patterns total**:
 
@@ -68,7 +68,7 @@ Plus **1 reconciliation-merge** (NOT a demotion):
 Two ROOT-ONLY files were promoted to `active/` (not demoted) during root reconciliation:
 
 - **`codex-review-per-phase-gate.md`**: Promoted because external session-log evidence shows recent active firings:
-  - `~/Documents/jj-knowledge-vault/agents/claude-code-m4/session-logs/2026-05-08.md` (Outreach v2 Phase 0+1 work) records the per-phase Codex gate firing on PR #96 + #97 (4 + 2 rounds respectively). The pattern's own evidence section cites these but the underlying authority is the session log itself, not self-citation.
+  - `<vault>/agents/claude-code-m4/session-logs/2026-05-08.md` (Outreach v2 Phase 0+1 work) records the per-phase Codex gate firing on PR #96 + #97 (4 + 2 rounds respectively). The pattern's own evidence section cites these but the underlying authority is the session log itself, not self-citation.
   - The pattern is also dogfooded as the structural baseline for arch-engineer's PR auto-merge gate (per its content).
   - High confidence (existing frontmatter), recent external firing (2026-05-07 dated session work), load-bearing for active discipline.
 - **`pre-customer-scaffolding-gets-pruned.md`**: Promoted because it is explicitly cited in `~/.claude/CLAUDE.md` Master Plan North Star Rule § 3 ("3-question test"). Load-bearing for every session report.

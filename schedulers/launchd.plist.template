@@ -2,10 +2,11 @@
 <!--
   launchd plist template for the dream-management nightly worker.
 
-  Install:
+  Install (run from the repo root; set MEMORY_ROOT to your agent's memory
+  directory first, e.g. MEMORY_ROOT="<vault>/agents/<agent>"):
     sed -e 's|{{NODE_BIN}}|/opt/homebrew/bin/node|g' \
-        -e 's|{{DREAM_BIN}}|/Users/joyd/dev/dream-management/bin/dream.js|g' \
-        -e 's|{{MEMORY_ROOT}}|/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4|g' \
+        -e "s|{{DREAM_BIN}}|$PWD/bin/dream.js|g" \
+        -e "s|{{MEMORY_ROOT}}|$MEMORY_ROOT|g" \
         -e 's|{{LABEL}}|com.jj.dream|g' \
         schedulers/launchd.plist.template > ~/Library/LaunchAgents/com.jj.dream.plist
     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jj.dream.plist

@@ -449,7 +449,7 @@ dream-management/
 ```json
 {
   "consumer_name": "claude-code-m4-vault",
-  "memory_root": "/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4",
+  "memory_root": "<vault>/agents/claude-code-m4",
   "tiers": {
     "hot": {
       "working_memory": "working-memory.md",
@@ -510,7 +510,7 @@ Each consumer has its own config + memory root. No cross-consumer memory access.
 - Senior architect audit (this session, agent ac158186)
 - Self-reflection report (this session, agent a5e39466)
 - Best-practices research (this session, agent a9136e5c)
-- Current state: `~/Documents/jj-knowledge-vault/agents/claude-code-m4/` + `~/.claude/projects/-Users-joyd-Documents-jj-knowledge-vault/memory/`
+- Current state: `<vault>/agents/claude-code-m4/` + `~/.claude/projects/<project>/memory/`
 
 **External**:
 - [MemGPT (arXiv:2310.08560)](https://arxiv.org/abs/2310.08560) — three-tier memory hierarchy
