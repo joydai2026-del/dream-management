@@ -122,8 +122,8 @@ display in Telegram clients. Markdown title is bolded.)
 post into a dedicated dream-mgmt topic):
 
 Telegram link `https://t.me/c/<INTERNAL_ID>/<THREAD_ID>/<MSG_ID>` decodes:
-- `chat_id` = `-100` + `<INTERNAL_ID>` (e.g. `t.me/c/3411410603/...` →
-  `chat_id = -1003411410603`)
+- `chat_id` = `-100` + `<INTERNAL_ID>` (e.g. `t.me/c/XXXXXXXXXX/...` →
+  `chat_id = -100XXXXXXXXXX`)
 - `message_thread_id` = `<THREAD_ID>` (the topic; ignore the trailing `<MSG_ID>`)
 
 1-3. Same as above (or reuse an existing bot).
@@ -133,7 +133,7 @@ Telegram link `https://t.me/c/<INTERNAL_ID>/<THREAD_ID>/<MSG_ID>` decodes:
    <key>TELEGRAM_BOT_TOKEN</key>
    <string>123456789:ABCdef...</string>
    <key>TELEGRAM_CHAT_ID</key>
-   <string>-1003411410603</string>
+   <string>-100XXXXXXXXXX</string>
    <key>TELEGRAM_THREAD_ID</key>
    <string>4</string>
    ```

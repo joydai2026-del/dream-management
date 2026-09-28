@@ -1,6 +1,6 @@
 {
   "consumer_name": "claude-code-m4-vault",
-  "memory_root": "/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4",
+  "memory_root": "<vault>/agents/claude-code-m4",
   "tiers": {
     "hot": {
       "working_memory": "working-memory.md",

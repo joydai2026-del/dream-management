@@ -83,7 +83,7 @@ archive/dreams/2026-05-09/
   "snapshot_at": "2026-05-09T03:00:14-04:00",
   "git_tag": "dream/pre/2026-05-09",
   "git_head_before": "f7f6188...",
-  "memory_root": "/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4",
+  "memory_root": "<vault>/agents/claude-code-m4",
   "files": [
     {
       "path": "working-memory.md",

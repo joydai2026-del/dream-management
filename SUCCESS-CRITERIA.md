@@ -3,8 +3,8 @@
 > Companion to `inbox/memory-system-redesign-2026-05-08.md`. Each phase has binary done-criteria, verification commands, failure modes with detector tests, and a rollback signal.
 
 **Conventions used below**:
-- `AGENT_DIR` = `~/Documents/jj-knowledge-vault/agents/claude-code-m4`
-- `GLOBAL_MEM` = `~/.claude/projects/-Users-joyd-Documents-jj-knowledge-vault/memory`
+- `AGENT_DIR` = `<vault>/agents/claude-code-m4`
+- `GLOBAL_MEM` = `~/.claude/projects/<project>/memory`
 - All `wc -l` counts are post-phase, run on M4.
 
 ---
@@ -17,7 +17,7 @@ Goal: shrink the every-session read load. corrections.md, session-index.md, and 
 
 | # | Criterion | Verification |
 |---|-----------|--------------|
-| 1 | `working-memory.md` exists at `AGENT_DIR/working-memory.md` and is ≤80 lines | `wc -l ~/Documents/jj-knowledge-vault/agents/claude-code-m4/working-memory.md` returns ≤80 |
+| 1 | `working-memory.md` exists at `AGENT_DIR/working-memory.md` and is ≤80 lines | `wc -l <vault>/agents/claude-code-m4/working-memory.md` returns ≤80 |
 | 2 | Old `context.md` either renamed to `working-memory.md` or replaced by a redirect stub ≤5 lines | `wc -l AGENT_DIR/context.md` returns ≤5 AND first line contains "redirect" or "moved" |
 | 3 | `corrections.md` ≤150 lines AND every entry is either UNRESOLVED or dated within 30 days | `wc -l AGENT_DIR/corrections.md` ≤150 AND `grep -E '^- \[2026-0[34]' AGENT_DIR/corrections.md \| wc -l` returns 0 (no entries older than 30d unless UNRESOLVED) |
 | 4 | `session-index.md` ≤200 lines AND contains exactly the last 10 sessions (by date header count) | `wc -l AGENT_DIR/session-index.md` ≤200 AND `grep -cE '^### 2026-' AGENT_DIR/session-index.md` returns ≤10 (note: live file uses H3 not H2 for session entries; original draft of this row had `^## 2026-` but the live convention is `^### 2026-`) |

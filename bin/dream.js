@@ -162,7 +162,7 @@ P5 worker — full pipeline: dual-gate → phase-0..5 stage → Stage A → Stag
 
 Notification env vars (read by the worker):
   TELEGRAM_BOT_TOKEN      Bot token from @BotFather (Telegram channel)
-  TELEGRAM_CHAT_ID        Chat or group ID to message (e.g. -1003411410603)
+  TELEGRAM_CHAT_ID        Chat or group ID to message (e.g. -100XXXXXXXXXX)
   TELEGRAM_THREAD_ID      Optional topic/forum-thread ID for supergroups
   DREAM_NO_NOTIFY=1       Same as --no-notify (umbrella suppress)
   DREAM_NO_TELEGRAM=1     Same as --no-telegram

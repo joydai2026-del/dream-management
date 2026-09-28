@@ -3,7 +3,7 @@
 Configuration for the first dream-management consumer — JJ's M4 vault.
 
 - `dream.config.json` — config consumed by the dream worker, wrapup-lint, and atomic-write helpers
-- `memory_root`: `/Users/joyd/Documents/jj-knowledge-vault/agents/claude-code-m4`
+- `memory_root`: `<vault>/agents/claude-code-m4` (replace `<vault>` with the absolute path to your vault before use; the worker does not expand placeholders)
 
 ## Adoption status
 
